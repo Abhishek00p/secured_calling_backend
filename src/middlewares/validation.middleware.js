@@ -1,10 +1,3 @@
-/**
- * Validate email format
- */
-const isValidEmail = (email) => {
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  return emailRegex.test(email);
-};
 
 /**
  * Middleware to validate login request
@@ -15,14 +8,7 @@ const validateLoginRequest = (req, res, next) => {
   if (!email || !password) {
     return res.status(400).json({
       success: false,
-      error_message: 'Email and password are required'
-    });
-  }
-
-  if (!isValidEmail(email)) {
-    return res.status(400).json({
-      success: false,
-      error_message: 'Invalid email format'
+      error_message: 'userId and password are required'
     });
   }
 
@@ -33,21 +19,15 @@ const validateLoginRequest = (req, res, next) => {
  * Middleware to validate user creation request
  */
 const validateCreateUserRequest = (req, res, next) => {
-  const { email, password, name } = req.body;
+  const { userId, password, name } = req.body;
 
-  if (!email || !password || !name) {
+  if (!userId || !password || !name) {
     return res.status(400).json({
       success: false,
-      error_message: 'Email, password, and name are required'
+      error_message: 'userId, password, and name are required'
     });
   }
 
-  if (!isValidEmail(email)) {
-    return res.status(400).json({
-      success: false,
-      error_message: 'Invalid email format'
-    });
-  }
 
   if (password.length < 6) {
     return res.status(400).json({
