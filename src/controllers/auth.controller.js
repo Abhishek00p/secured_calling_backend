@@ -85,7 +85,7 @@ exports.login = async (req, res) => {
       data: {
         token,
         user: {
-          userId: userDoc.id,
+          userId: userDoc.userId,
           email: userData.email,
           name: userData.name,
           isAdmin: userData.isAdmin || false,
