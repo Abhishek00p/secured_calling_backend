@@ -79,20 +79,21 @@ exports.login = async (req, res) => {
 
     // Generate token
     const token = generateToken(userDoc.id, userData.isAdmin ? 'admin' : (userData.isMember ? 'member' : 'user'));
-
-    res.status(200).json({
-      success: true,
-      data: {
+    const data = {
         token,
         user: {
-          userId: userDoc.userId,
+          userId: userData.userId,
           email: userData.email,
           name: userData.name,
           isAdmin: userData.isAdmin || false,
           isMember: userData.isMember || false,
           memberCode: userData.memberCode
         }
-      }
+      };
+      logger.info("the data which will be sent for login  : ",userData);
+    res.status(200).json({
+      success: true,
+      data: data,
     });
   } catch (error) {
     logger.error('Login error:', error);
