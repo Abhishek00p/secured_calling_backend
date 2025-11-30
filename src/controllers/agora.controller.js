@@ -39,13 +39,14 @@ exports.generateToken = async (req, res) => {
     );
 
     // Store token in Firestore
-    await db.collection('meetings').doc(channelName).set({
+    await db.collection('meetings').doc(channelName).update({[`tokens.${uid}`]:{
       token,
       uid,
       role,
+      expiry_time : privilegeExpiredTs ,
       createdAt: new Date().toISOString(),
       expiresAt: new Date(privilegeExpiredTs * 1000).toISOString()
-    });
+    }});
 
     res.status(200).json({
       success: true,
