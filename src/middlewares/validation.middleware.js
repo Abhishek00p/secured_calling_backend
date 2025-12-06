@@ -1,3 +1,4 @@
+const { logger } = require('../middlewares/logging.middleware');
 
 /**
  * Middleware to validate login request
@@ -19,9 +20,9 @@ const validateLoginRequest = (req, res, next) => {
  * Middleware to validate user creation request
  */
 const validateCreateUserRequest = (req, res, next) => {
-  const { userId, password, name } = req.body;
+  const { email, password, name } = req.body;
 
-  if (!userId || !password || !name) {
+  if (!email || !password || !name) {
     return res.status(400).json({
       success: false,
       error_message: 'userId, password, and name are required'
@@ -67,13 +68,24 @@ const validateAgoraTokenRequest = (req, res, next) => {
  */
 const validateRecordingRequest = (req, res, next) => {
   const { cname, uid, type } = req.body;
+  logger.info(`this is vlaidation funcs : ${req.path}`);
 
-  if (!cname || !uid) {
-    return res.status(400).json({
-      success: false,
-      error_message: 'Channel name and user ID are required'
-    });
+  if (req.path.includes("stop")) {
+    if (!cname) {
+      return res.status(400).json({
+        success: false,
+        error_message: 'Channel name required to stop recording meeting'
+      });
+    }
+  } else {
+    if (!cname || !uid) {
+      return res.status(400).json({
+        success: false,
+        error_message: 'Channel name and user ID are required'
+      });
+    }
   }
+
 
   if (type && !['mix', 'individual'].includes(type)) {
     return res.status(400).json({

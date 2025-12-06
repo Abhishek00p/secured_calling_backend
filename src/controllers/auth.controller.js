@@ -80,17 +80,17 @@ exports.login = async (req, res) => {
     // Generate token
     const token = generateToken(userDoc.id, userData.isAdmin ? 'admin' : (userData.isMember ? 'member' : 'user'));
     const data = {
-        token,
-        user: {
-          userId: userData.userId,
-          email: userData.email,
-          name: userData.name,
-          isAdmin: userData.isAdmin || false,
-          isMember: userData.isMember || false,
-          memberCode: userData.memberCode
-        }
-      };
-      logger.info("the data which will be sent for login  : ",userData);
+      token,
+      user: {
+        userId: userData.userId,
+        email: userData.email,
+        name: userData.name,
+        isAdmin: userData.isAdmin || false,
+        isMember: userData.isMember || false,
+        memberCode: userData.memberCode
+      }
+    };
+    logger.info("the data which will be sent for login  : ", userData);
     res.status(200).json({
       success: true,
       data: data,
@@ -103,13 +103,46 @@ exports.login = async (req, res) => {
     });
   }
 };
+function generate7DigitId() {
+  return Math.floor(1000000 + Math.random() * 9000000); // 1000000 to 9999999
+}
+async function generateUniqueUserId() {
+  let uniqueId;
+  let docExists = true;
+
+  while (docExists) {
+    uniqueId = generate7DigitId();
+    const docRef = db.collection('users').doc(uniqueId.toString());
+    const docSnap = await docRef.get();
+    docExists = docSnap.exists; // true if ID already exists
+  }
+
+  return uniqueId;
+}
+
+function getPlanInfo(expiryDate, planDays) {
+
+  // Determine plan type
+  let plan = "Silver";
+
+  if (planDays > 180) {
+    plan = "Premium";
+  } else if (planDays > 60) {
+    plan = "Gold";
+  }
+
+  return {
+    expiryDate: expiryDate.toISOString(),
+    plan: plan
+  };
+}
 
 /**
  * Create User
  */
 exports.createUser = async (req, res) => {
   try {
-    const { email, password, name, isAdmin, isMember, memberCode } = req.body;
+    const { email, password, name, isAdmin, isMember, memberCode, purchaseDate, planDays, maxParticipantsAllowed } = req.body;
 
     // Check if user already exists
     const existingUser = await db.collection('users')
@@ -125,17 +158,27 @@ exports.createUser = async (req, res) => {
 
     // Hash password
     const hashedPassword = await hashPassword(password);
-
+    const newUserId = await generateUniqueUserId();
+    const expiryDate = new Date(purchaseDate);
+    expiryDate.setDate(expiryDate.getDate() + planDays);
+    const subscription = getPlanInfo(expiryDate, planDays);
     // Create user document
-    const userDoc = await db.collection('users').add({
+    const userDoc = await db.collection('users').doc(newUserId.toString()).set({
       email,
       name,
       hashedPassword,
+      password: password,
       isAdmin: isAdmin || false,
       isMember: isMember || false,
       memberCode: memberCode || null,
       isActive: true,
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      planDays: planDays,
+      maxParticipantsAllowed: maxParticipantsAllowed,
+      purchaseDate: purchaseDate,
+      userId: newUserId,
+      subscription: subscription,
+      planExpiryDate: expiryDate.toISOString()
     });
 
     res.status(201).json({
@@ -146,7 +189,8 @@ exports.createUser = async (req, res) => {
         name,
         isAdmin: isAdmin || false,
         isMember: isMember || false,
-        memberCode
+        memberCode,
+        planDays
       }
     });
   } catch (error) {
@@ -203,8 +247,13 @@ exports.resetPassword = async (req, res) => {
 exports.getUserCredentials = async (req, res) => {
   try {
     const { userId } = req.params;
-
-    const userDoc = await db.collection('users').doc(userId).get();
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: "user id required",
+      });
+    }
+    const userDoc = await db.collection('users').doc(userId.toString()).get();
 
     if (!userDoc.exists) {
       return res.status(404).json({
@@ -220,6 +269,7 @@ exports.getUserCredentials = async (req, res) => {
       data: {
         userId: userDoc.id,
         email: userData.email,
+        password: userData.password,
         name: userData.name,
         isAdmin: userData.isAdmin || false,
         isMember: userData.isMember || false,

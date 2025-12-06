@@ -1,7 +1,7 @@
 const { RtcTokenBuilder, RtcRole } = require('agora-token');
 const axios = require('axios');
 const { db } = require('../config/firebase');
-const { AGORA_CONFIG } = require('../config/env');
+const { AGORA_CONFIG, STORAGE_CONFIG } = require('../config/env');
 const { logger } = require('../middlewares/logging.middleware');
 
 const BASE_URL = `https://api.agora.io/v1/apps/${AGORA_CONFIG.appId}/cloud_recording`;
@@ -39,14 +39,16 @@ exports.generateToken = async (req, res) => {
     );
 
     // Store token in Firestore
-    await db.collection('meetings').doc(channelName).update({[`tokens.${uid}`]:{
-      token,
-      uid,
-      role,
-      expiry_time : privilegeExpiredTs ,
-      createdAt: new Date().toISOString(),
-      expiresAt: new Date(privilegeExpiredTs * 1000).toISOString()
-    }});
+    await db.collection('meetings').doc(channelName).update({
+      [`tokens.${uid}`]: {
+        token,
+        uid,
+        role,
+        expiry_time: privilegeExpiredTs,
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(privilegeExpiredTs * 1000).toISOString()
+      }
+    });
 
     res.status(200).json({
       success: true,
@@ -122,7 +124,7 @@ const getDocId = (cname, type) => `${cname}_${type}`;
  */
 exports.startCloudRecording = async (req, res) => {
   try {
-    const { cname, uid, type = 'mix' } = req.body;
+    const { cname, uid, type = 'mix', token } = req.body;
 
     // Acquire recording resource
     const acquireResponse = await axios.post(
@@ -132,11 +134,43 @@ exports.startCloudRecording = async (req, res) => {
         uid: uid.toString(),
         clientRequest: { resourceExpiredHour: 24 }
       },
-      { headers: { Authorization: AUTH_HEADER } }
+      { headers: { Authorization: AUTH_HEADER }, validateStatus: (status) => true }
     );
+    if (acquireResponse.status >= 400) {
+      logger.error(`Failed to get credential for starting recording : ${acquireResponse.status}, ${acquireResponse.data}`);
+      return res.status(acquireResponse.status).json({
+        success: false,
+        error_message: acquireResponse.data.toString()
+      });
+    }
+    const resourceId = acquireResponse.data.resourceId;
+    logger.info(`this is acquire response : ${JSON.stringify(acquireResponse.data, null, 2)} `);
 
-    const { resourceId } = acquireResponse.data;
-
+    //storage config
+    const storageConfig = {
+      vendor: 11,
+      region: 0,
+      bucket: STORAGE_CONFIG.bucketName,
+      accessKey: STORAGE_CONFIG.cloudflareAccessKey,
+      secretKey: STORAGE_CONFIG.cloudflareSecretKey,
+      fileNamePrefix: ["agora", "recordings", type],
+      extensionParams: {
+        "endpoint": "https://684d7d3ceda1fe3533f104f1cf8197c7.r2.cloudflarestorage.com"
+      }
+    };
+    const recordingConfig = type === "mix"
+      ? {
+        channelType: 1,
+        streamTypes: 0,
+        audioProfile: 1, // ✅ valid in mix
+        maxIdleTime: 160,
+      }
+      : {
+        channelType: 1,
+        streamTypes: 0,
+        subscribeUidGroup: 0,
+        maxIdleTime: 160, // ✅ simpler config for individual
+      };
     // Start recording
     const startResponse = await axios.post(
       `${BASE_URL}/resourceid/${resourceId}/mode/${type}/start`,
@@ -144,29 +178,22 @@ exports.startCloudRecording = async (req, res) => {
         cname,
         uid: uid.toString(),
         clientRequest: {
-          token: null,
-          recordingConfig: {
-            maxIdleTime: 30,
-            streamTypes: 2,
-            channelType: 1,
-            videoStreamType: 0,
-            transcodingConfig: {
-              height: 640,
-              width: 360,
-              bitrate: 500,
-              fps: 15,
-              mixedVideoLayout: 1,
-              backgroundColor: "#000000",
-            },
-          },
-          recordingFileConfig: {
-            avFileType: ["hls", "mp4"],
-          },
+          token: token,
+          recordingConfig: recordingConfig,
+          storageConfig,
         },
       },
-      { headers: { Authorization: AUTH_HEADER } }
+      {
+        headers: { Authorization: AUTH_HEADER }, validateStatus: (status) => true
+      }
     );
-
+    if (startResponse.status >= 400) {
+      logger.error(`Failed to Start recording : ${startResponse.status}, ${startResponse.data}`);
+      return res.status(startResponse.status).json({
+        success: false,
+        error_message: startResponse.data.toString()
+      });
+    }
     // Store recording info in Firestore
     await db.collection('recordings').doc(getDocId(cname, type)).set({
       cname,
@@ -184,7 +211,8 @@ exports.startCloudRecording = async (req, res) => {
       data: startResponse.data
     });
   } catch (error) {
-    logger.error('Start recording error:', error);
+    logger.error(`Start recording error: ${error}`);
+
     res.status(500).json({
       success: false,
       error_message: 'Failed to start recording'
@@ -227,9 +255,17 @@ exports.stopCloudRecording = async (req, res) => {
         uid: recorderUid.toString(),
         clientRequest: {}
       },
-      { headers: { Authorization: AUTH_HEADER } }
+      {
+        headers: { Authorization: AUTH_HEADER }, validateStatus: (status) => true
+      }
     );
-
+    if (stopResponse.status >= 400) {
+      logger.error(`Failed to stop recording : ${stopResponse.status}, ${stopResponse.data}`);
+      return res.status(stopResponse.status).json({
+        success: false,
+        error_message: stopResponse.data.toString()
+      });
+    }
     // Update Firestore
     await docRef.update({
       status: 'stopped',
@@ -278,9 +314,21 @@ exports.queryRecordingStatus = async (req, res) => {
 
     const response = await axios.get(
       `${BASE_URL}/resourceid/${resourceId}/sid/${sid}/mode/${type}/query`,
-      { headers: { Authorization: AUTH_HEADER } }
+      {
+        headers: { Authorization: AUTH_HEADER },
+
+        validateStatus: (status) => true
+      },
     );
 
+    if (response.status >= 400) {
+      logger.error(`Failed to get status of meeting recording : ${response.status}, ${response.data}`);
+      res.status(response.status).json({
+        success: false,
+        error_message: response.data.toString()
+      });
+      return;
+    }
     // Update status in Firestore
     await docRef.update({
       queryResponse: response.data,
