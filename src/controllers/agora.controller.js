@@ -498,50 +498,94 @@ exports.listRecordings = async (req, res) => {
       });
     }
 
-    // List objects from R2 bucket
+    // List objects
     const params = {
-      Bucket: STORAGE_CONFIG.bucketName, // your bucket name
-      Prefix: prefix
+      Bucket: STORAGE_CONFIG.bucketName,
+      Prefix: prefix,
     };
-    const command = new ListObjectsV2Command(params);
-    const data = await s3.send(command);
+    const data = await s3.send(new ListObjectsV2Command(params));
 
+    // Filter only .m3u8 files that match channel
     const files = (data.Contents || [])
-      .filter(obj => obj.Key.includes(channelName));
-    
-    // Filter objects containing the channel name
-    const filteredObjects = await Promise.all(
+      .filter(obj =>
+        obj.Key.includes(channelName) && obj.Key.endsWith(".m3u8")
+      );
+
+    if (files.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error_message: "No .m3u8 playlist found for the channel"
+      });
+    }
+
+    // For each .m3u8 file, rewrite the segments into signed URLs
+    const signedPlaylists = await Promise.all(
       files.map(async (obj) => {
-        const command = new GetObjectCommand({
+        const playlistCmd = new GetObjectCommand({
           Bucket: STORAGE_CONFIG.bucketName,
           Key: obj.Key,
         });
-        const signedUrl = await getSignedUrl(s3, command, { expiresIn: 3600 });
+
+        const playlistResp = await s3.send(playlistCmd);
+        const playlistText =
+          await playlistResp.Body.transformToString("utf-8");
+
+        const lines = playlistText.split("\n");
+        const basePath = obj.Key.substring(0, obj.Key.lastIndexOf("/") + 1);
+
+        const updatedLines = await Promise.all(
+          lines.map(async (line) => {
+            if (line.endsWith(".ts")) {
+              const segmentKey = basePath + line;
+              return await getSignedUrl(
+                s3,
+                new GetObjectCommand({
+                  Bucket: STORAGE_CONFIG.bucketName,
+                  Key: segmentKey
+                }),
+                { expiresIn: 3600 }
+              );
+            }
+            return line;
+          })
+        );
+
+        const updatedPlaylist = updatedLines.join("\n");
+        const newKey = `secure/${Date.now()}_${obj.Key.split("/").pop()}`;
+
+        // Upload rewritten playlist to R2
+        await s3.send(new PutObjectCommand({
+          Bucket: STORAGE_CONFIG.bucketName,
+          Key: newKey,
+          Body: updatedPlaylist,
+          ContentType: "application/vnd.apple.mpegurl"
+        }));
+
+        const signedM3u8Url = await getSignedUrl(
+          s3,
+          new GetObjectCommand({
+            Bucket: STORAGE_CONFIG.bucketName,
+            Key: newKey
+          }),
+          { expiresIn: 3600 }
+        );
 
         return {
           key: obj.Key,
+          playableUrl: signedM3u8Url,
           lastModified: obj.LastModified,
           size: obj.Size,
-          url: signedUrl
         };
       })
     );
 
-    // Log query to Firestore
-    await db.collection('agora_recording_queries').add({
-      channelName,
-      prefix,
-      response: filteredObjects,
-      createdAt: new Date().toISOString()
-    });
-
     res.status(200).json({
       success: true,
-      data: filteredObjects
+      data: signedPlaylists
     });
 
   } catch (error) {
-    logger.error('List recordings error:', error);
+    console.error("List recordings error:", error);
     res.status(500).json({
       success: false,
       error_message: 'Failed to list recordings'
