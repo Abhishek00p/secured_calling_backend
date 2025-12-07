@@ -3,7 +3,7 @@ const axios = require('axios');
 const { db } = require('../config/firebase');
 const { AGORA_CONFIG, STORAGE_CONFIG } = require('../config/env');
 const { logger } = require('../middlewares/logging.middleware');
-const { S3Client, GetObjectCommand } = require("@aws-sdk/client-s3");
+const { S3Client, GetObjectCommand, ListObjectsV2Command } = require("@aws-sdk/client-s3");
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 
 
@@ -507,23 +507,25 @@ exports.listRecordings = async (req, res) => {
     const data = await s3.send(command);
 
     const files = (data.Contents || [])
-      .filter(obj => obj.Key.includes(channelName))
+      .filter(obj => obj.Key.includes(channelName));
+    
     // Filter objects containing the channel name
-    const filteredObjects = files
-      .map(obj => {
-        const signedUrl = s3.getSignedUrl('getObject', {
-          Bucket: STORAGE_CONFIG.bucketName,  // e.g. "agora-recordings"
+    const filteredObjects = await Promise.all(
+      files.map(async (obj) => {
+        const command = new GetObjectCommand({
+          Bucket: STORAGE_CONFIG.bucketName,
           Key: obj.Key,
-          Expires: 3600,
         });
+        const signedUrl = await getSignedUrl(s3, command, { expiresIn: 3600 });
 
         return {
           key: obj.Key,
           lastModified: obj.LastModified,
           size: obj.Size,
           url: signedUrl
-        }
-      });
+        };
+      })
+    );
 
     // Log query to Firestore
     await db.collection('agora_recording_queries').add({
