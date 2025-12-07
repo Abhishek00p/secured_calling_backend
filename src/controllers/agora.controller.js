@@ -3,7 +3,7 @@ const axios = require('axios');
 const { db } = require('../config/firebase');
 const { AGORA_CONFIG, STORAGE_CONFIG } = require('../config/env');
 const { logger } = require('../middlewares/logging.middleware');
-const { S3Client, GetObjectCommand, ListObjectsV2Command } = require("@aws-sdk/client-s3");
+const { S3Client, GetObjectCommand, PutObjectCommand, ListObjectsV2Command } = require("@aws-sdk/client-s3");
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 
 
