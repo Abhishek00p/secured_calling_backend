@@ -474,14 +474,15 @@ exports.updateRecording = async (req, res) => {
     });
   }
 };
-const s3 = new AWS.S3({
-  endpoint: STORAGE_CONFIG.cloudflareEndpoint, // your R2 endpoint
-  region: 'auto', // R2 uses "auto"
+const s3 = new S3Client({
+  endpoint: STORAGE_CONFIG.cloudflareEndpoint,
+  region: "auto",
   credentials: {
     accessKeyId: STORAGE_CONFIG.cloudflareAccessKey,
-    secretAccessKey: STORAGE_CONFIG.cloudflareSecretKey
+    secretAccessKey: STORAGE_CONFIG.cloudflareSecretKey,
   }
 });
+
 
 /**
  * List Recordings from R2 filtered by channel name
@@ -502,8 +503,9 @@ exports.listRecordings = async (req, res) => {
       Bucket: STORAGE_CONFIG.bucketName, // your bucket name
       Prefix: prefix
     };
+    const command = new ListObjectsV2Command(params);
+    const data = await s3.send(command);
 
-    const data = await s3.listObjectsV2(params).promise();
     const files = (data.Contents || [])
       .filter(obj => obj.Key.includes(channelName))
     // Filter objects containing the channel name
