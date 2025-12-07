@@ -509,7 +509,7 @@ exports.listRecordings = async (req, res) => {
         key: obj.Key,
         lastModified: obj.LastModified,
         size: obj.Size,
-        url: `${STORAGE_CONFIG.cloudflareEndpoint}/${prefix}${obj.key}`
+        url: `${STORAGE_CONFIG.cloudflareEndpoint}/${prefix}${obj.Key}`
       }));
 
     // Log query to Firestore
