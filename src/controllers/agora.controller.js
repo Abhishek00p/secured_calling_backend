@@ -3,7 +3,9 @@ const axios = require('axios');
 const { db } = require('../config/firebase');
 const { AGORA_CONFIG, STORAGE_CONFIG } = require('../config/env');
 const { logger } = require('../middlewares/logging.middleware');
-const AWS = require('aws-sdk');
+import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+
 
 const BASE_URL = `https://api.agora.io/v1/apps/${AGORA_CONFIG.appId}/cloud_recording`;
 const AUTH_HEADER = "Basic " + Buffer.from(
@@ -474,10 +476,11 @@ exports.updateRecording = async (req, res) => {
 };
 const s3 = new AWS.S3({
   endpoint: STORAGE_CONFIG.cloudflareEndpoint, // your R2 endpoint
-  accessKeyId: STORAGE_CONFIG.cloudflareAccessKey,
-  secretAccessKey: STORAGE_CONFIG.cloudflareSecretKey,
-  signatureVersion: 'v4',
   region: 'auto', // R2 uses "auto"
+  credentials: {
+    accessKeyId: STORAGE_CONFIG.cloudflareAccessKey,
+    secretAccessKey: STORAGE_CONFIG.cloudflareSecretKey
+  }
 });
 
 /**
@@ -502,7 +505,7 @@ exports.listRecordings = async (req, res) => {
 
     const data = await s3.listObjectsV2(params).promise();
     const files = (data.Contents || [])
-      .filter(obj => obj.Key.includes(".m3u8") && obj.Key.includes(channelName))
+      .filter(obj => obj.Key.includes(channelName))
     // Filter objects containing the channel name
     const filteredObjects = files
       .map(obj => {
