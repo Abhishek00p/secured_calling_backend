@@ -161,7 +161,7 @@ exports.startCloudRecording = async (req, res) => {
       bucket: STORAGE_CONFIG.bucketName,
       accessKey: STORAGE_CONFIG.cloudflareAccessKey,
       secretKey: STORAGE_CONFIG.cloudflareSecretKey,
-      fileNamePrefix: ["agora", "recordings", type],
+      fileNamePrefix: ["recordings", type],
       extensionParams: {
         "endpoint": "https://684d7d3ceda1fe3533f104f1cf8197c7.r2.cloudflarestorage.com"
       }
@@ -202,10 +202,14 @@ exports.startCloudRecording = async (req, res) => {
       }
     );
     if (startResponse.status >= 400) {
-      logger.error(`Failed to Start recording : ${startResponse.status}, ${startResponse.data}`);
+      const errorMsg = typeof startResponse.data === "string"
+        ? startResponse.data
+        : JSON.stringify(startResponse.data);
+
+      logger.error(`Failed to start recording: ${startResponse.status} - ${errorMsg}`);
       return res.status(startResponse.status).json({
         success: false,
-        error_message: startResponse.data.toString()
+        error_message: errorMsg
       });
     }
     // Store recording info in Firestore
