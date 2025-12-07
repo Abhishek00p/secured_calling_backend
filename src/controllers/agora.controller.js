@@ -293,10 +293,22 @@ exports.stopCloudRecording = async (req, res) => {
       }
     );
     if (stopResponse.status >= 400) {
-      logger.error(`Failed to stop recording : ${stopResponse.status}, ${stopResponse.data}`);
+      let parsed = null;
+
+      // Try to parse Agora error JSON safely
+      try {
+        parsed = typeof stopResponse.data === "string"
+          ? JSON.parse(stopResponse.data)
+          : stopResponse.data;
+      } catch (e) {
+        parsed = { raw: stopResponse.data };
+      }
+
+
+      logger.error(`Failed to stop recording: ${stopResponse.status} - ${JSON.stringify(parsed)}`);
       return res.status(stopResponse.status).json({
         success: false,
-        error_message: stopResponse.data.toString()
+        error_message: JSON.stringify(parsed)
       });
     }
     // Update Firestore
