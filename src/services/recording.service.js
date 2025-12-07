@@ -288,7 +288,7 @@ class RecordingService {
   /**
    * Proxy method: Fetch and serve .m3u8 file with correct headers
    * This ensures ExoPlayer can recognize it as an HLS playlist
-   * Also rewrites .ts segment URLs to use proxy endpoint
+   * Also rewrites .ts segment URLs to use signed URLs (via proxy)
    */
   async getM3U8Playlist(key, baseUrl, expiresIn = 3600) {
     try {
@@ -307,45 +307,60 @@ class RecordingService {
 
       const playlistContent = response.data;
       
+      // Log original content for debugging
+      logger.info(`Original m3u8 content length: ${playlistContent.length}, First 200 chars: ${playlistContent.substring(0, 200)}`);
+      
       // Extract directory path from the key (for relative .ts paths)
       const keyDir = key.substring(0, key.lastIndexOf('/') + 1);
       
-      // Rewrite .ts segment URLs to use proxy endpoint
+      // Rewrite .ts segment URLs to use proxy endpoint (which will serve signed URLs)
       // Pattern: lines starting with segment filenames (not starting with #)
       const lines = playlistContent.split('\n');
-      const rewrittenLines = lines.map((line) => {
-        const trimmedLine = line.trim();
-        
-        // Skip comments and empty lines
-        if (trimmedLine.startsWith('#') || trimmedLine === '') {
-          return line;
-        }
-        
-        // If line contains .ts file, rewrite to use proxy endpoint
-        if (trimmedLine.endsWith('.ts')) {
-          // Handle both relative and absolute paths
-          let tsKey;
-          if (trimmedLine.startsWith('http://') || trimmedLine.startsWith('https://')) {
-            // Absolute URL - extract key from URL if possible, or use as-is
-            // For now, if it's already absolute, we might need to keep it
-            // But for signed URLs, we should rewrite to proxy
-            return line; // Keep original for now
-          } else {
-            // Relative path - construct full key
-            tsKey = keyDir + trimmedLine;
+      const rewrittenLines = await Promise.all(
+        lines.map(async (line) => {
+          const trimmedLine = line.trim();
+          
+          // Skip comments and empty lines
+          if (trimmedLine.startsWith('#') || trimmedLine === '') {
+            return line;
           }
           
-          // Rewrite to use proxy endpoint
-          const proxyUrl = `${baseUrl}/api/agora/recording/playlist?key=${encodeURIComponent(tsKey)}`;
-          return proxyUrl;
-        }
-        
-        // Return original line if not a .ts file
-        return line;
-      });
+          // If line contains .ts file, rewrite to use proxy endpoint
+          if (trimmedLine.endsWith('.ts')) {
+            // Handle both relative and absolute paths
+            let tsKey;
+            if (trimmedLine.startsWith('http://') || trimmedLine.startsWith('https://')) {
+              // Absolute URL - might be a signed URL, try to extract key
+              // Try to extract the key from the URL if it's our R2 URL
+              const r2UrlMatch = trimmedLine.match(/recordings\/(mix|individual)\/([^?]+)/);
+              if (r2UrlMatch) {
+                tsKey = r2UrlMatch[0];
+              } else {
+                // Can't extract key, keep original URL
+                return trimmedLine;
+              }
+            } else {
+              // Relative path - construct full key
+              tsKey = keyDir + trimmedLine;
+            }
+            
+            // Rewrite to use proxy endpoint (which will generate signed URL for .ts)
+            const proxyUrl = `${baseUrl}/api/agora/recording/playlist?key=${encodeURIComponent(tsKey)}`;
+            return proxyUrl;
+          }
+          
+          // Return original line if not a .ts file
+          return line;
+        })
+      );
+
+      const finalContent = rewrittenLines.join('\n');
+      
+      // Log rewritten content for debugging
+      logger.info(`Rewritten m3u8 content length: ${finalContent.length}, First 200 chars: ${finalContent.substring(0, 200)}`);
 
       return {
-        content: rewrittenLines.join('\n'),
+        content: finalContent,
         contentType: 'application/vnd.apple.mpegurl' // Correct content-type for HLS
       };
     } catch (error) {

@@ -48,5 +48,5 @@ module.exports = {
   },
   // Force HTTPS for proxy URLs (useful when behind reverse proxy)
   FORCE_HTTPS: process.env.FORCE_HTTPS === 'true' || false,
-  BASE_URL: process.env.BASE_URL || null, // Override base URL if set
+  SERVER_BASE_URL: process.env.SERVER_BASE_URL || null, // Override base URL if set
 };

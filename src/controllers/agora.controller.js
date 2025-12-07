@@ -651,36 +651,58 @@ exports.proxyM3U8Playlist = async (req, res) => {
       res.setHeader('Content-Type', playlist.contentType);
       res.setHeader('Access-Control-Allow-Origin', '*');
       res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type');
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Accept-Ranges', 'bytes');
+      
+      // Log for debugging
+      logger.info(`Serving m3u8 playlist: ${key}, Content-Type: ${playlist.contentType}, Content length: ${playlist.content.length}`);
+      logger.debug(`M3U8 content preview (first 500 chars): ${playlist.content.substring(0, Math.min(500, playlist.content.length))}`);
 
-      // Send the playlist content
+      // CRITICAL: Send raw text content, NOT JSON
+      // ExoPlayer expects plain text .m3u8 content with correct MIME type
       res.status(200).send(playlist.content);
     } else if (key.endsWith('.ts')) {
       // Handle .ts segment file
+      // Generate signed URL for the .ts segment
       const signedUrl = await recordingService.generateSignedUrl(key);
 
       if (!signedUrl) {
+        logger.error(`Failed to generate signed URL for .ts segment: ${key}`);
         return res.status(404).json({
           success: false,
           error_message: 'Failed to generate signed URL for segment'
         });
       }
 
-      // Fetch and proxy the .ts file
-      const axios = require('axios');
-      const segmentResponse = await axios.get(signedUrl, {
-        responseType: 'arraybuffer',
-        timeout: 30000
-      });
+      try {
+        // Fetch and proxy the .ts file from R2
+        const segmentResponse = await axios.get(signedUrl, {
+          responseType: 'arraybuffer',
+          timeout: 30000,
+          maxRedirects: 5
+        });
 
-      // Set correct headers for TS segment
-      res.setHeader('Content-Type', 'video/mp2t');
-      res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-      res.setHeader('Cache-Control', 'public, max-age=3600');
+        // Set correct headers for TS segment
+        res.setHeader('Content-Type', 'video/mp2t');
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type');
+        res.setHeader('Accept-Ranges', 'bytes');
+        res.setHeader('Cache-Control', 'public, max-age=3600');
 
-      // Send the segment content
-      res.status(200).send(segmentResponse.data);
+        // Log for debugging
+        logger.info(`Serving .ts segment: ${key}, Size: ${segmentResponse.data.length} bytes`);
+
+        // CRITICAL: Send raw binary content, NOT JSON
+        res.status(200).send(Buffer.from(segmentResponse.data));
+      } catch (error) {
+        logger.error(`Error fetching .ts segment ${key}:`, error);
+        return res.status(500).json({
+          success: false,
+          error_message: 'Failed to fetch segment'
+        });
+      }
     } else {
       return res.status(400).json({
         success: false,
