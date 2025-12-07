@@ -354,13 +354,24 @@ exports.queryRecordingStatus = async (req, res) => {
       },
     );
 
-    if (response.status >= 400) {
-      logger.error(`Failed to get status of meeting recording : ${response.status}, ${response.data}`);
-      res.status(response.status).json({
+    if (startResponse.status >= 400) {
+      let parsed = null;
+
+      // Try to parse Agora error JSON safely
+      try {
+        parsed = typeof startResponse.data === "string"
+          ? JSON.parse(startResponse.data)
+          : startResponse.data;
+      } catch (e) {
+        parsed = { raw: startResponse.data };
+      }
+
+
+      logger.error(`Failed to get status of  recording: ${startResponse.status} - ${JSON.stringify(parsed)}`);
+      return res.status(startResponse.status).json({
         success: false,
-        error_message: response.data.toString()
+        error_message: JSON.stringify(parsed)
       });
-      return;
     }
     // Update status in Firestore
     await docRef.update({
