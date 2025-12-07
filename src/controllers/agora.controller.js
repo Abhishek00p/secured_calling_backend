@@ -407,6 +407,7 @@ exports.queryRecordingStatus = async (req, res) => {
 /**
  * Update Recording
  */
+
 exports.updateRecording = async (req, res) => {
   try {
     const { cname, type, uid, audioSubscribeUids = [] } = req.body;
@@ -467,6 +468,66 @@ exports.updateRecording = async (req, res) => {
     res.status(500).json({
       success: false,
       error_message: 'Failed to update recording'
+    });
+  }
+};
+const s3 = new AWS.S3({
+  endpoint: STORAGE_CONFIG.cloudflareEndpoint, // your R2 endpoint
+  accessKeyId: STORAGE_CONFIG.cloudflareAccessKey,
+  secretAccessKey: STORAGE_CONFIG.cloudflareSecretKey,
+  signatureVersion: 'v4',
+  region: 'auto', // R2 uses "auto"
+});
+
+/**
+ * List Recordings from R2 filtered by channel name
+ */
+exports.listRecordings = async (req, res) => {
+  try {
+    const { channelName, prefix = 'recordings/mix/' } = req.body;
+
+    if (!channelName) {
+      return res.status(400).json({
+        success: false,
+        error_message: 'channelName is required'
+      });
+    }
+
+    // List objects from R2 bucket
+    const params = {
+      Bucket: STORAGE_CONFIG.bucketName, // your bucket name
+      Prefix: prefix
+    };
+
+    const data = await s3.listObjectsV2(params).promise();
+
+    // Filter objects containing the channel name
+    const filteredObjects = (data.Contents || [])
+      .filter(obj => obj.Key.includes(channelName))
+      .map(obj => ({
+        key: obj.Key,
+        lastModified: obj.LastModified,
+        size: obj.Size,
+      }));
+
+    // Log query to Firestore
+    await db.collection('agora_recording_queries').add({
+      channelName,
+      prefix,
+      response: filteredObjects,
+      createdAt: new Date().toISOString()
+    });
+
+    res.status(200).json({
+      success: true,
+      data: filteredObjects
+    });
+
+  } catch (error) {
+    logger.error('List recordings error:', error);
+    res.status(500).json({
+      success: false,
+      error_message: 'Failed to list recordings'
     });
   }
 };

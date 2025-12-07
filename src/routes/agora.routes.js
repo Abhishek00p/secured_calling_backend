@@ -13,5 +13,6 @@ router.post('/recording/start', [verifyToken, validateRecordingRequest], agoraCo
 router.post('/recording/stop', [verifyToken, validateRecordingRequest], agoraController.stopCloudRecording);
 router.post('/recording/status', [verifyToken, validateRecordingRequest], agoraController.queryRecordingStatus);
 router.post('/recording/update', [verifyToken, validateRecordingRequest], agoraController.updateRecording);
+router.post('/recording/list', [verifyToken], agoraController.listRecordings);
 
 module.exports = router;
