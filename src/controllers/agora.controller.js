@@ -487,7 +487,7 @@ const s3 = new S3Client({
 /**
  * List Recordings from R2 filtered by channel name
  */
-exports.listRecordings = async (req, res) => {
+exports.listMixRecordings = async (req, res) => {
   try {
     const { channelName, prefix = 'recordings/mix/' } = req.body;
 
@@ -589,6 +589,125 @@ exports.listRecordings = async (req, res) => {
     res.status(500).json({
       success: false,
       error_message: 'Failed to list recordings'
+    });
+  }
+};
+
+
+
+exports.listIndividualRecordings = async (req, res) => {
+  try {
+    const { channelName } = req.body;
+
+    if (!channelName) {
+      return res.status(400).json({
+        success: false,
+        error_message: "channelName is required"
+      });
+    }
+
+    const prefix = `recordings/individual/`;
+
+    // Fetch all objects under individual recordings
+    const listResp = await s3.send(new ListObjectsV2Command({
+      Bucket: STORAGE_CONFIG.bucketName,
+      Prefix: prefix,
+    }));
+
+    const allFiles = listResp.Contents || [];
+
+    // Filter only .m3u8 files containing channelName
+    const playlistFiles = allFiles.filter(obj =>
+      obj.Key.includes(channelName) && obj.Key.endsWith(".m3u8")
+    );
+
+    if (playlistFiles.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error_message: "No individual .m3u8 found for this channel"
+      });
+    }
+
+    const results = await Promise.all(
+      playlistFiles.map(async (file) => {
+
+        const fileName = file.Key.split("/").pop(); // just the name
+
+        // Extract UID using naming pattern
+        const match = fileName.match(/__uid_s_(.*?)__uid_e/);
+        const userId = match ? match[1] : "unknown";
+
+        // Get playlist content
+        const playlistResp = await s3.send(new GetObjectCommand({
+          Bucket: STORAGE_CONFIG.bucketName,
+          Key: file.Key
+        }));
+
+        const playlistData =
+          await playlistResp.Body.transformToString("utf-8");
+
+        const lines = playlistData.split("\n");
+        const basePath = file.Key.replace(fileName, "");
+
+        // Convert TS file names → signed URLs
+        const rewritten = await Promise.all(
+          lines.map(async (line) => {
+            if (line.endsWith(".ts")) {
+              const segKey = basePath + line;
+              return await getSignedUrl(
+                s3,
+                new GetObjectCommand({
+                  Bucket: STORAGE_CONFIG.bucketName,
+                  Key: segKey
+                }),
+                { expiresIn: 3600 }
+              );
+            }
+            return line;
+          })
+        );
+
+        const finalPlaylist = rewritten.join("\n");
+        const secureKey = `secure/${Date.now()}_${fileName}`;
+
+        // Upload secure playlist
+        await s3.send(new PutObjectCommand({
+          Bucket: STORAGE_CONFIG.bucketName,
+          Key: secureKey,
+          Body: finalPlaylist,
+          ContentType: "application/vnd.apple.mpegurl"
+        }));
+
+        const signedPlaylistUrl = await getSignedUrl(
+          s3,
+          new GetObjectCommand({
+            Bucket: STORAGE_CONFIG.bucketName,
+            Key: secureKey,
+          }),
+          { expiresIn: 3600 }
+        );
+
+        return {
+          userId,
+          playlistKey: file.Key,
+          playableUrl: signedPlaylistUrl,
+          lastModified: file.LastModified,
+          size: file.Size,
+        };
+      })
+    );
+
+    res.status(200).json({
+      success: true,
+      channelName,
+      data: results
+    });
+
+  } catch (e) {
+    console.error("Individual recordings error:", e);
+    res.status(500).json({
+      success: false,
+      error_message: "Failed to fetch individual recordings"
     });
   }
 };
