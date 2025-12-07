@@ -145,6 +145,14 @@ exports.startCloudRecording = async (req, res) => {
     }
     const resourceId = acquireResponse.data.resourceId;
     logger.info(`this is acquire response : ${JSON.stringify(acquireResponse.data, null, 2)} `);
+    // fetch meeting data
+    const participantsSnapshot = await db
+      .collection("meetings")
+      .doc(cname.toString())
+      .collection("participants")
+      .get();
+
+    const participantIds = participantsSnapshot.docs.map(doc => doc.id.toString());
 
     //storage config
     const storageConfig = {
@@ -170,6 +178,7 @@ exports.startCloudRecording = async (req, res) => {
         streamTypes: 0,
         subscribeUidGroup: 0,
         maxIdleTime: 160, // ✅ simpler config for individual
+
       };
     // Start recording
     const startResponse = await axios.post(
@@ -180,6 +189,11 @@ exports.startCloudRecording = async (req, res) => {
         clientRequest: {
           token: token,
           recordingConfig: recordingConfig,
+          streamSubscribe: {
+            audioUidList: {
+              subscribeAudioUids: ["#allstream#"]
+            }
+          },
           storageConfig,
         },
       },
