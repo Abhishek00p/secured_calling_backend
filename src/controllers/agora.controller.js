@@ -505,12 +505,20 @@ exports.listRecordings = async (req, res) => {
     // Filter objects containing the channel name
     const filteredObjects = (data.Contents || [])
       .filter(obj => obj.Key.includes(channelName))
-      .map(obj => ({
-        key: obj.Key,
-        lastModified: obj.LastModified,
-        size: obj.Size,
-        url: `${STORAGE_CONFIG.cloudflareEndpoint}/${prefix}${obj.Key}`
-      }));
+      .map(obj => {
+        const signedUrl = s3.getSignedUrl('getObject', {
+          Bucket: STORAGE_CONFIG.bucketName,  // e.g. "agora-recordings"
+          Key: obj.Key,
+          Expires: 3600,
+        });
+
+        return {
+          key: obj.Key,
+          lastModified: obj.LastModified,
+          size: obj.Size,
+          url: signedUrl
+        }
+      });
 
     // Log query to Firestore
     await db.collection('agora_recording_queries').add({
