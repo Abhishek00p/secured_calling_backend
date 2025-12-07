@@ -202,14 +202,29 @@ exports.startCloudRecording = async (req, res) => {
       }
     );
     if (startResponse.status >= 400) {
-      const errorMsg = typeof startResponse.data === "string"
-        ? startResponse.data
-        : JSON.stringify(startResponse.data);
+      let parsed = null;
 
-      logger.error(`Failed to start recording: ${startResponse.status} - ${errorMsg}`);
+      // Try to parse Agora error JSON safely
+      try {
+        parsed = typeof startResponse.data === "string"
+          ? JSON.parse(startResponse.data)
+          : startResponse.data;
+      } catch (e) {
+        parsed = { raw: startResponse.data };
+      }
+      // Extract useful info if available
+      const errorDetails = {
+        cname: parsed?.cname || null,
+        uid: parsed?.uid || null,
+        code: parsed?.code || null,
+        reason: parsed?.reason || "Unknown error",
+        raw: parsed
+      };
+
+      logger.error(`Failed to start recording: ${startResponse.status} - ${errorDetails.reason}`);
       return res.status(startResponse.status).json({
         success: false,
-        error_message: errorMsg
+        error_message: errorDetails.reason
       });
     }
     // Store recording info in Firestore
