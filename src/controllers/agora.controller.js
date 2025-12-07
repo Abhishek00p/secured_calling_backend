@@ -1,10 +1,9 @@
 const { RtcTokenBuilder, RtcRole } = require('agora-token');
 const axios = require('axios');
 const { db } = require('../config/firebase');
-const { AGORA_CONFIG, STORAGE_CONFIG } = require('../config/env');
+const { AGORA_CONFIG, STORAGE_CONFIG, FORCE_HTTPS, SERVER_BASE_URL } = require('../config/env');
 const { logger } = require('../middlewares/logging.middleware');
-const { S3Client, GetObjectCommand } = require("@aws-sdk/client-s3");
-const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
+const recordingService = require('../services/recording.service');
 
 
 const BASE_URL = `https://api.agora.io/v1/apps/${AGORA_CONFIG.appId}/cloud_recording`;
@@ -198,6 +197,10 @@ exports.startCloudRecording = async (req, res) => {
             }
           },
           storageConfig,
+          recordingFileConfig: {
+            avFileType: ["hls"]
+          }
+
         },
       },
       {
@@ -474,22 +477,13 @@ exports.updateRecording = async (req, res) => {
     });
   }
 };
-const s3 = new S3Client({
-  endpoint: STORAGE_CONFIG.cloudflareEndpoint,
-  region: "auto",
-  credentials: {
-    accessKeyId: STORAGE_CONFIG.cloudflareAccessKey,
-    secretAccessKey: STORAGE_CONFIG.cloudflareSecretKey,
-  }
-});
-
-
 /**
  * List Recordings from R2 filtered by channel name
+ * Supports both mix and individual recording types
  */
 exports.listRecordings = async (req, res) => {
   try {
-    const { channelName, prefix = 'recordings/mix/' } = req.body;
+    const { channelName, type = 'mix' } = req.body;
 
     if (!channelName) {
       return res.status(400).json({
@@ -498,51 +492,207 @@ exports.listRecordings = async (req, res) => {
       });
     }
 
-    // List objects from R2 bucket
-    const params = {
-      Bucket: STORAGE_CONFIG.bucketName, // your bucket name
-      Prefix: prefix
-    };
-    const command = new ListObjectsV2Command(params);
-    const data = await s3.send(command);
-
-    const files = (data.Contents || [])
-      .filter(obj => obj.Key.includes(channelName))
-    // Filter objects containing the channel name
-    const filteredObjects = files
-      .map(obj => {
-        const signedUrl = s3.getSignedUrl('getObject', {
-          Bucket: STORAGE_CONFIG.bucketName,  // e.g. "agora-recordings"
-          Key: obj.Key,
-          Expires: 3600,
-        });
-
-        return {
-          key: obj.Key,
-          lastModified: obj.LastModified,
-          size: obj.Size,
-          url: signedUrl
-        }
+    if (type !== 'mix' && type !== 'individual') {
+      return res.status(400).json({
+        success: false,
+        error_message: 'type must be either "mix" or "individual"'
       });
+    }
 
-    // Log query to Firestore
-    await db.collection('agora_recording_queries').add({
-      channelName,
-      prefix,
-      response: filteredObjects,
-      createdAt: new Date().toISOString()
-    });
+    // Get base URL for proxy endpoint
+    // Check for X-Forwarded-Proto header (if behind reverse proxy)
+    // Or use FORCE_HTTPS env var, or BASE_URL override
+    let protocol = req.protocol;
+    if (FORCE_HTTPS || req.get('x-forwarded-proto') === 'https') {
+      protocol = 'https';
+    }
+    const host = req.get('host');
+    const baseUrl = SERVER_BASE_URL || `${protocol}://${host}`;
 
-    res.status(200).json({
-      success: true,
-      data: filteredObjects
-    });
+    const result = await recordingService.getRecordingByType(channelName, type, baseUrl);
+
+    if (!result.success) {
+      return res.status(404).json({
+        success: false,
+        error_message: result.message || 'No recordings found'
+      });
+    }
+
+    res.status(200).json(result);
 
   } catch (error) {
     logger.error('List recordings error:', error);
     res.status(500).json({
       success: false,
       error_message: 'Failed to list recordings'
+    });
+  }
+};
+
+/**
+ * Get Mix Recording - specific endpoint for mix recordings
+ */
+exports.getMixRecording = async (req, res) => {
+  try {
+    const { channelName } = req.body;
+
+    if (!channelName) {
+      return res.status(400).json({
+        success: false,
+        error_message: 'channelName is required'
+      });
+    }
+
+    // Get base URL for proxy endpoint
+    // Check for X-Forwarded-Proto header (if behind reverse proxy)
+    // Or use FORCE_HTTPS env var, or BASE_URL override
+    let protocol = req.protocol;
+    if (FORCE_HTTPS || req.get('x-forwarded-proto') === 'https') {
+      protocol = 'https';
+    }
+    const host = req.get('host');
+    const baseUrl = SERVER_BASE_URL || `${protocol}://${host}`;
+
+    const result = await recordingService.listMixRecordings(channelName, baseUrl);
+
+    if (!result.success) {
+      return res.status(404).json({
+        success: false,
+        error_message: result.message || 'No mix recording found'
+      });
+    }
+
+    res.status(200).json(result);
+
+  } catch (error) {
+    logger.error('Get mix recording error:', error);
+    res.status(500).json({
+      success: false,
+      error_message: 'Failed to get mix recording'
+    });
+  }
+};
+
+/**
+ * Get Individual Recordings - specific endpoint for individual recordings
+ */
+exports.getIndividualRecordings = async (req, res) => {
+  try {
+    const { channelName } = req.body;
+
+    if (!channelName) {
+      return res.status(400).json({
+        success: false,
+        error_message: 'channelName is required'
+      });
+    }
+
+    // Get base URL for proxy endpoint
+    // Check for X-Forwarded-Proto header (if behind reverse proxy)
+    // Or use FORCE_HTTPS env var, or BASE_URL override
+    let protocol = req.protocol;
+    if (FORCE_HTTPS || req.get('x-forwarded-proto') === 'https') {
+      protocol = 'https';
+    }
+    const host = req.get('host');
+    const baseUrl = SERVER_BASE_URL || `${protocol}://${host}`;
+
+    const result = await recordingService.listIndividualRecordings(channelName, baseUrl);
+
+    if (!result.success) {
+      return res.status(404).json({
+        success: false,
+        error_message: result.message || 'No individual recordings found'
+      });
+    }
+
+    res.status(200).json(result);
+
+  } catch (error) {
+    logger.error('Get individual recordings error:', error);
+    res.status(500).json({
+      success: false,
+      error_message: 'Failed to get individual recordings'
+    });
+  }
+};
+
+/**
+ * Proxy M3U8 Playlist or TS Segment - serves files with correct content-type
+ * This ensures ExoPlayer can recognize .m3u8 as an HLS playlist
+ * Also handles .ts segments for HLS playback
+ */
+exports.proxyM3U8Playlist = async (req, res) => {
+  try {
+    const { key } = req.query;
+
+    if (!key) {
+      return res.status(400).json({
+        success: false,
+        error_message: 'key parameter is required'
+      });
+    }
+
+    // Get base URL from request
+    // Check for X-Forwarded-Proto header (if behind reverse proxy)
+    // Or use FORCE_HTTPS env var, or BASE_URL override
+    let protocol = req.protocol;
+    if (FORCE_HTTPS || req.get('x-forwarded-proto') === 'https') {
+      protocol = 'https';
+    }
+    const host = req.get('host');
+    const baseUrl = SERVER_BASE_URL || `${protocol}://${host}`;
+
+    if (key.endsWith('.m3u8')) {
+      // Handle .m3u8 playlist file
+      const playlist = await recordingService.getM3U8Playlist(key, baseUrl);
+
+      // Set correct headers for HLS playback
+      res.setHeader('Content-Type', playlist.contentType);
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+
+      // Send the playlist content
+      res.status(200).send(playlist.content);
+    } else if (key.endsWith('.ts')) {
+      // Handle .ts segment file
+      const signedUrl = await recordingService.generateSignedUrl(key);
+
+      if (!signedUrl) {
+        return res.status(404).json({
+          success: false,
+          error_message: 'Failed to generate signed URL for segment'
+        });
+      }
+
+      // Fetch and proxy the .ts file
+      const axios = require('axios');
+      const segmentResponse = await axios.get(signedUrl, {
+        responseType: 'arraybuffer',
+        timeout: 30000
+      });
+
+      // Set correct headers for TS segment
+      res.setHeader('Content-Type', 'video/mp2t');
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+
+      // Send the segment content
+      res.status(200).send(segmentResponse.data);
+    } else {
+      return res.status(400).json({
+        success: false,
+        error_message: 'Only .m3u8 and .ts files can be proxied'
+      });
+    }
+
+  } catch (error) {
+    logger.error('Proxy playlist/segment error:', error);
+    res.status(500).json({
+      success: false,
+      error_message: 'Failed to proxy file'
     });
   }
 };

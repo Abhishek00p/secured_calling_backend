@@ -14,5 +14,8 @@ router.post('/recording/stop', [verifyToken, validateRecordingRequest], agoraCon
 router.post('/recording/status', [verifyToken, validateRecordingRequest], agoraController.queryRecordingStatus);
 router.post('/recording/update', [verifyToken, validateRecordingRequest], agoraController.updateRecording);
 router.post('/recording/list', [verifyToken], agoraController.listRecordings);
+router.post('/recording/list/mix', [verifyToken], agoraController.getMixRecording);
+router.post('/recording/list/individual', [verifyToken], agoraController.getIndividualRecordings);
+router.get('/recording/playlist', agoraController.proxyM3U8Playlist);
 
 module.exports = router;

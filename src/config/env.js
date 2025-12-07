@@ -46,4 +46,7 @@ module.exports = {
     cloudflareEndpoint: process.env.CLOUDFLARE_ENDPOINT,
     bucketName: process.env.BUCKET_NAME,
   },
+  // Force HTTPS for proxy URLs (useful when behind reverse proxy)
+  FORCE_HTTPS: process.env.FORCE_HTTPS === 'true' || false,
+  BASE_URL: process.env.BASE_URL || null, // Override base URL if set
 };
