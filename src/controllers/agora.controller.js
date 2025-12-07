@@ -501,10 +501,10 @@ exports.listRecordings = async (req, res) => {
     };
 
     const data = await s3.listObjectsV2(params).promise();
-
+    const files = (data.Contents || [])
+      .filter(obj => obj.Key.includes(".m3u8") && obj.Key.includes(channelName))
     // Filter objects containing the channel name
-    const filteredObjects = (data.Contents || [])
-      .filter(obj => obj.Key.includes(channelName))
+    const filteredObjects = files
       .map(obj => {
         const signedUrl = s3.getSignedUrl('getObject', {
           Bucket: STORAGE_CONFIG.bucketName,  // e.g. "agora-recordings"
