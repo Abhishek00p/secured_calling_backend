@@ -3,8 +3,8 @@ const axios = require('axios');
 const { db } = require('../config/firebase');
 const { AGORA_CONFIG, STORAGE_CONFIG } = require('../config/env');
 const { logger } = require('../middlewares/logging.middleware');
-import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+const { S3Client, GetObjectCommand } = require("@aws-sdk/client-s3");
+const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 
 
 const BASE_URL = `https://api.agora.io/v1/apps/${AGORA_CONFIG.appId}/cloud_recording`;
