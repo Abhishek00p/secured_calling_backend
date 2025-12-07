@@ -3,6 +3,7 @@ const axios = require('axios');
 const { db } = require('../config/firebase');
 const { AGORA_CONFIG, STORAGE_CONFIG } = require('../config/env');
 const { logger } = require('../middlewares/logging.middleware');
+const AWS = require('aws-sdk');
 
 const BASE_URL = `https://api.agora.io/v1/apps/${AGORA_CONFIG.appId}/cloud_recording`;
 const AUTH_HEADER = "Basic " + Buffer.from(
