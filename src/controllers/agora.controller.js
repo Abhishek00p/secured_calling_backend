@@ -354,21 +354,21 @@ exports.queryRecordingStatus = async (req, res) => {
       },
     );
 
-    if (startResponse.status >= 400) {
+    if (response.status >= 400) {
       let parsed = null;
 
       // Try to parse Agora error JSON safely
       try {
-        parsed = typeof startResponse.data === "string"
-          ? JSON.parse(startResponse.data)
-          : startResponse.data;
+        parsed = typeof response.data === "string"
+          ? JSON.parse(response.data)
+          : response.data;
       } catch (e) {
-        parsed = { raw: startResponse.data };
+        parsed = { raw: response.data };
       }
 
 
-      logger.error(`Failed to get status of  recording: ${startResponse.status} - ${JSON.stringify(parsed)}`);
-      return res.status(startResponse.status).json({
+      logger.error(`Failed to get status of  recording: ${response.status} - ${JSON.stringify(parsed)}`);
+      return res.status(response.status).json({
         success: false,
         error_message: JSON.stringify(parsed)
       });
