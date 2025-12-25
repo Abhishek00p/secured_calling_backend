@@ -711,3 +711,193 @@ exports.listIndividualRecordings = async (req, res) => {
     });
   }
 };
+const toEpochMs = (ts) => {
+  if (!ts) return null;
+  return ts.seconds * 1000 + Math.floor(ts.nanoseconds / 1e6);
+};
+/*
+meetings
+ └── meetingId
+     └── participants
+         └── userId
+             ├── uid: "23"
+             ├── joinedAt: timestamp
+             └── speakingEvents
+                 ├── autoId1
+                 │    ├── start: Timestamp
+                 │    ├── end: Timestamp
+                 │    ├── source: "agora-volume"
+                 ├── autoId2
+                 │    ├── start: Timestamp
+                 │    ├── end: Timestamp
+
+*/
+exports.getRecordingsByUserId = async (req, res) => {
+  try {
+    const { meetingId, userId } = req.body;
+
+    if (!meetingId || !userId) {
+      return res.status(400).json({
+        success: false,
+        error_message: "meetingId and userId are required",
+      });
+    }
+
+    const db = admin.firestore();
+
+    // 1️⃣ Fetch speaking events from Firestore
+    const eventsSnap = await db
+      .collection("meetings")
+      .doc(meetingId)
+      .collection("participants")
+      .doc(userId)
+      .collection("speakingEvents")
+      .orderBy("start", "asc")
+      .get();
+
+    if (eventsSnap.empty) {
+      return res.status(200).json({
+        success: true,
+        userId,
+        segments: [],
+      });
+    }
+
+    const speakingEvents = eventsSnap.docs.map(doc => {
+      const data = doc.data();
+      return {
+        startEpoch: toEpochMs(data.start),
+        endEpoch: toEpochMs(data.end),
+      };
+    });
+
+    // 2️⃣ Fetch user's audio playlists (same logic as before)
+    const prefix = `recordings/individual/`;
+
+    const listResp = await s3.send(
+      new ListObjectsV2Command({
+        Bucket: STORAGE_CONFIG.bucketName,
+        Prefix: prefix,
+      })
+    );
+
+    const allFiles = listResp.Contents || [];
+
+    const userPlaylists = allFiles.filter(obj =>
+      obj.Key.includes(meetingId) &&
+      obj.Key.includes(`__uid_s_${userId}__uid_e`) &&
+      obj.Key.endsWith(".m3u8")
+    );
+
+    if (userPlaylists.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error_message: "No audio recordings found for user",
+      });
+    }
+
+    // 3️⃣ Process each playlist
+    const results = [];
+
+    for (const file of userPlaylists) {
+      const fileName = file.Key.split("/").pop();
+      const basePath = file.Key.replace(fileName, "");
+
+      // Extract playlist recording start time (epoch)
+      const tsStartMatch = fileName.match(/__ts_s_(\d+)/);
+      if (!tsStartMatch) continue;
+
+      const playlistStartEpoch = Number(tsStartMatch[1]) * 1000;
+
+      // Read playlist
+      const playlistResp = await s3.send(
+        new GetObjectCommand({
+          Bucket: STORAGE_CONFIG.bucketName,
+          Key: file.Key,
+        })
+      );
+
+      const playlistData =
+        await playlistResp.Body.transformToString("utf-8");
+
+      const lines = playlistData.split("\n");
+
+      // Replace TS with signed URLs
+      const rewritten = await Promise.all(
+        lines.map(async (line) => {
+          if (line.endsWith(".ts")) {
+            const segKey = basePath + line;
+            return await getSignedUrl(
+              s3,
+              new GetObjectCommand({
+                Bucket: STORAGE_CONFIG.bucketName,
+                Key: segKey,
+              }),
+              { expiresIn: 3600 }
+            );
+          }
+          return line;
+        })
+      );
+
+      const finalPlaylist = rewritten.join("\n");
+
+      const secureKey = `secure/${Date.now()}_${fileName}`;
+
+      await s3.send(
+        new PutObjectCommand({
+          Bucket: STORAGE_CONFIG.bucketName,
+          Key: secureKey,
+          Body: finalPlaylist,
+          ContentType: "application/vnd.apple.mpegurl",
+        })
+      );
+
+      const signedPlaylistUrl = await getSignedUrl(
+        s3,
+        new GetObjectCommand({
+          Bucket: STORAGE_CONFIG.bucketName,
+          Key: secureKey,
+        }),
+        { expiresIn: 3600 }
+      );
+
+      // 4️⃣ Map speaking events to this playlist
+      for (const event of speakingEvents) {
+        if (
+          event.startEpoch >= playlistStartEpoch &&
+          event.endEpoch > playlistStartEpoch
+        ) {
+          const seekFromSeconds =
+            Math.floor((event.startEpoch - playlistStartEpoch) / 1000);
+
+          results.push({
+            userId,
+            startEpoch: event.startEpoch,
+            endEpoch: event.endEpoch,
+            timeRange: `${new Date(event.startEpoch).toLocaleTimeString()} - ${new Date(event.endEpoch).toLocaleTimeString()}`,
+            playableUrl: signedPlaylistUrl,
+            seekFromSeconds,
+          });
+        }
+      }
+    }
+
+    // 5️⃣ Sort by time
+    results.sort((a, b) => a.startEpoch - b.startEpoch);
+
+    res.status(200).json({
+      success: true,
+      meetingId,
+      userId,
+      segments: results,
+    });
+
+  } catch (err) {
+    console.error("User speaking timeline error:", err);
+    res.status(500).json({
+      success: false,
+      error_message: "Failed to build user speaking timeline",
+    });
+  }
+};

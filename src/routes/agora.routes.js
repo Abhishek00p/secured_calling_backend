@@ -15,5 +15,6 @@ router.post('/recording/status', [verifyToken, validateRecordingRequest], agoraC
 router.post('/recording/update', [verifyToken, validateRecordingRequest], agoraController.updateRecording);
 router.post('/recording/list/mix', [verifyToken], agoraController.listMixRecordings);
 router.post('/recording/list/individual', [verifyToken], agoraController.listIndividualRecordings);
+router.post('/recording/getRecordingsByUserId', [verifyToken], agoraController.getRecordingsByUserId);
 
 module.exports = router;
