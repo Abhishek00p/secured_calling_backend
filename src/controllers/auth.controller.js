@@ -287,7 +287,7 @@ exports.createUserUnderMember = async (req, res) => {
     logger.error("Create user under member error:", error);
     res.status(500).json({
       success: false,
-      error_message: "Failed to create user under member"
+      error_message: `Failed to create user under member : ${error}`
     });
   }
 };
