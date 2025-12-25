@@ -743,7 +743,6 @@ exports.getRecordingsByUserId = async (req, res) => {
       });
     }
 
-    const db = admin.firestore();
 
     // 1️⃣ Fetch speaking events from Firestore
     const eventsSnap = await db
