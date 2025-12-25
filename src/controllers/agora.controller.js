@@ -143,8 +143,8 @@ async function generateUniqueUserId() {
  */
 exports.startCloudRecording = async (req, res) => {
   try {
-    const { cname, type = 'mix', token, uid } = req.body;
-
+    const { cname, type = 'mix', token, } = req.body;
+    const uid = type === 'mix' ? 9999999 : 9999998;
     // Acquire recording resource
     const acquireResponse = await axios.post(
       `${BASE_URL}/acquire`,

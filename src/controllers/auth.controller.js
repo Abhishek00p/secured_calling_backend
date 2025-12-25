@@ -104,7 +104,7 @@ exports.login = async (req, res) => {
   }
 };
 function generate7DigitId() {
-  return Math.floor(1000000 + Math.random() * 9000000); // 1000000 to 9999999
+  return Math.floor(1000000 + Math.random() * 9999997); // 1000000 to 9999999
 }
 async function generateUniqueUserId() {
   let uniqueId;
