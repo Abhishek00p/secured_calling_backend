@@ -684,6 +684,24 @@ exports.listIndividualRecordings = async (req, res) => {
           await playlistResp.Body.transformToString("utf-8");
 
         const lines = playlistData.split("\n");
+        // ⭐ extract recording time from FIRST .ts segment
+        let recordingDate = null;
+
+        for (const rawLine of lines) {
+          const line = rawLine.trim();
+
+          // skip comments / empty lines
+          if (!line || line.startsWith('#')) continue;
+
+          // allow .ts or .ts?query
+          if (line.includes('.ts')) {
+            recordingDate = extractRecordingTimeFromKey(
+              line.split('?')[0]
+            );
+            if (recordingDate) break;
+          }
+        }
+
         const basePath = file.Key.replace(fileName, "");
 
         // Convert TS file names → signed URLs
@@ -730,6 +748,9 @@ exports.listIndividualRecordings = async (req, res) => {
           playableUrl: signedPlaylistUrl,
           lastModified: file.LastModified,
           size: file.Size,
+          recordingTime: recordingDate
+            ? recordingDate.toISOString()
+            : null, // ⭐ NEW FIELD
         };
       })
     );
@@ -748,6 +769,8 @@ exports.listIndividualRecordings = async (req, res) => {
     });
   }
 };
+
+
 const toEpochMs = (ts) => {
   if (!ts) return null;
   return ts.seconds * 1000 + Math.floor(ts.nanoseconds / 1e6);
