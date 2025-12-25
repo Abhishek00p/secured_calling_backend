@@ -212,7 +212,7 @@ exports.createUserUnderMember = async (req, res) => {
     // 2️⃣ Fetch member details
     const memberSnap = await db
       .collection("users")
-      .doc(memberUserId.userId.toString())
+      .doc(memberUserId.toString())
       .get();
 
     if (!memberSnap.exists) {
