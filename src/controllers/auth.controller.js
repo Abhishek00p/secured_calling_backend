@@ -268,7 +268,7 @@ exports.createUserUnderMember = async (req, res) => {
       maxParticipantsAllowed: memberData.maxParticipantsAllowed,
 
       // tracking
-      createdByMemberId: currentUser.userId,
+      createdByMemberId: memberUserId,
       createdAt: new Date().toISOString()
     });
 
@@ -279,7 +279,7 @@ exports.createUserUnderMember = async (req, res) => {
         email,
         name,
         memberCode: memberData.memberCode,
-        createdBy: currentUser.userId
+        createdBy: memberUserId
       }
     });
 
