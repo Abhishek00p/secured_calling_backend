@@ -588,7 +588,21 @@ exports.listMixRecordings = async (req, res) => {
           { expiresIn: 3600 }
         );
 
-        const recordingDate = extractRecordingTimeFromKey(obj.Key);
+        let recordingDate = null;
+
+        for (const rawLine of lines) {
+          const line = rawLine.trim();
+
+          // skip comments and empty lines
+          if (!line || line.startsWith('#')) continue;
+
+          // allow .ts or .ts?query
+          if (line.includes('.ts')) {
+            recordingDate = extractRecordingTimeFromKey(line.split('?')[0]);
+            if (recordingDate) break;
+          }
+        }
+
 
         return {
           key: obj.Key,
@@ -597,7 +611,7 @@ exports.listMixRecordings = async (req, res) => {
           size: obj.Size,
           recordingTime: recordingDate
             ? recordingDate.toISOString()
-            : null, // ⭐ NEW FIELD
+            : null,
         };
 
       })
