@@ -665,6 +665,29 @@ exports.listIndividualRecordings = async (req, res) => {
       });
     }
 
+    const userIds = new Set();
+    playlistFiles.forEach(file => {
+      const fileName = file.Key.split("/").pop();
+      const match = fileName.match(/__uid_s_(.*?)__uid_e/);
+      if (match) userIds.add(match[1]);
+    });
+    const userMap = {};
+
+
+    await Promise.all(
+      Array.from(userIds).map(async (uid) => {
+        try {
+          const snap = await db.collection("users").doc(uid).get();
+          if (snap.exists) {
+            userMap[uid] = snap.data()?.username || snap.data()?.name || "Unknown";
+          } else {
+            userMap[uid] = "Unknown";
+          }
+        } catch (e) {
+          userMap[uid] = "Unknown";
+        }
+      })
+    );
     const results = await Promise.all(
       playlistFiles.map(async (file) => {
 
@@ -743,7 +766,8 @@ exports.listIndividualRecordings = async (req, res) => {
         );
 
         return {
-          userId,
+          userId: userId,
+          username: userMap[userId] || "Unknown",
           playlistKey: file.Key,
           playableUrl: signedPlaylistUrl,
           lastModified: file.LastModified,
