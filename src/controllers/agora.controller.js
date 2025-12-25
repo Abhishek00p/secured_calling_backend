@@ -483,6 +483,24 @@ const s3 = new S3Client({
   }
 });
 
+function extractRecordingTimeFromKey(key) {
+  const match = key.match(/_(\d{14,17})\.(m3u8|ts)$/);
+  if (!match) return null;
+
+  const ts = match[1];
+
+  const year = Number(ts.slice(0, 4));
+  const month = Number(ts.slice(4, 6)) - 1;
+  const day = Number(ts.slice(6, 8));
+  const hour = Number(ts.slice(8, 10));
+  const min = Number(ts.slice(10, 12));
+  const sec = Number(ts.slice(12, 14));
+  const ms =
+    ts.length > 14 ? Number(ts.slice(14).padEnd(3, '0')) : 0;
+
+  return new Date(Date.UTC(year, month, day, hour, min, sec, ms));
+}
+
 
 /**
  * List Recordings from R2 filtered by channel name
@@ -570,12 +588,18 @@ exports.listMixRecordings = async (req, res) => {
           { expiresIn: 3600 }
         );
 
+        const recordingDate = extractRecordingTimeFromKey(obj.Key);
+
         return {
           key: obj.Key,
           playableUrl: signedM3u8Url,
-          lastModified: obj.LastModified,
+          lastModified: obj.LastModified, // unchanged
           size: obj.Size,
+          recordingTime: recordingDate
+            ? recordingDate.toISOString()
+            : null, // ⭐ NEW FIELD
         };
+
       })
     );
 
@@ -589,166 +613,6 @@ exports.listMixRecordings = async (req, res) => {
     res.status(500).json({
       success: false,
       error_message: 'Failed to list recordings'
-    });
-  }
-};
-// updated version
-exports.listAllMixRecordings = async (req, res) => {
-  try {
-    const { meetingId, channelName, prefix = "recordings/mix/" } = req.body;
-
-    if (!meetingId || !channelName) {
-      return res.status(400).json({
-        success: false,
-        error_message: "meetingId and channelName are required"
-      });
-    }
-
-    /* ----------------------------------------------------
-     * 1️⃣ Fetch recording windows from Firestore
-     * --------------------------------------------------*/
-    const snapshot = await db
-      .collection("meetings")
-      .doc(meetingId)
-      .collection("recordingTrack")
-      .get();
-
-    if (snapshot.empty) {
-      return res.status(404).json({
-        success: false,
-        error_message: "No recording tracks found"
-      });
-    }
-
-    const recordingWindows = snapshot.docs.map(doc => doc.data());
-
-    /* ----------------------------------------------------
-     * 2️⃣ List m3u8 files from R2
-     * --------------------------------------------------*/
-    const data = await s3.send(new ListObjectsV2Command({
-      Bucket: STORAGE_CONFIG.bucketName,
-      Prefix: prefix
-    }));
-
-    const m3u8Files = (data.Contents || [])
-      .filter(obj =>
-        obj.Key.includes(channelName) &&
-        obj.Key.endsWith(".m3u8")
-      );
-
-    if (m3u8Files.length === 0) {
-      return res.status(404).json({
-        success: false,
-        error_message: "No recordings found"
-      });
-    }
-
-    /* ----------------------------------------------------
-     * 3️⃣ Group files by recording window
-     * --------------------------------------------------*/
-    const BUFFER_SECONDS = 20;
-    const groupedRecordings = {};
-
-    for (const file of m3u8Files) {
-      const fileEpoch =
-        Math.floor(new Date(file.LastModified).getTime() / 1000);
-
-      const matchedWindow = recordingWindows.find(win =>
-        fileEpoch >= (win.startTime - BUFFER_SECONDS) &&
-        fileEpoch <= (win.stopTime + BUFFER_SECONDS)
-      );
-
-      if (!matchedWindow) continue;
-
-      const recordingId = String(matchedWindow.startTime);
-
-      if (!groupedRecordings[recordingId]) {
-        groupedRecordings[recordingId] = {
-          recordingId,
-          startTime: matchedWindow.startTime,
-          stopTime: matchedWindow.stopTime,
-          files: []
-        };
-      }
-
-      groupedRecordings[recordingId].files.push(file);
-    }
-
-    /* ----------------------------------------------------
-     * 4️⃣ Generate signed playlists
-     * --------------------------------------------------*/
-    const response = [];
-
-    for (const recording of Object.values(groupedRecordings)) {
-      for (const obj of recording.files) {
-
-        const playlistResp = await s3.send(
-          new GetObjectCommand({
-            Bucket: STORAGE_CONFIG.bucketName,
-            Key: obj.Key
-          })
-        );
-
-        const playlistText =
-          await playlistResp.Body.transformToString("utf-8");
-
-        const basePath =
-          obj.Key.substring(0, obj.Key.lastIndexOf("/") + 1);
-
-        const updatedLines = await Promise.all(
-          playlistText.split("\n").map(async line => {
-            if (line.endsWith(".ts")) {
-              return await getSignedUrl(
-                s3,
-                new GetObjectCommand({
-                  Bucket: STORAGE_CONFIG.bucketName,
-                  Key: basePath + line
-                }),
-                { expiresIn: 3600 }
-              );
-            }
-            return line;
-          })
-        );
-
-        const newKey = `secure/${recording.recordingId}_${Date.now()}.m3u8`;
-
-        await s3.send(new PutObjectCommand({
-          Bucket: STORAGE_CONFIG.bucketName,
-          Key: newKey,
-          Body: updatedLines.join("\n"),
-          ContentType: "application/vnd.apple.mpegurl"
-        }));
-
-        const playableUrl = await getSignedUrl(
-          s3,
-          new GetObjectCommand({
-            Bucket: STORAGE_CONFIG.bucketName,
-            Key: newKey
-          }),
-          { expiresIn: 3600 }
-        );
-
-        response.push({
-          recordingId: recording.recordingId,
-          startTime: recording.startTime,
-          stopTime: recording.stopTime,
-          playableUrl,
-          size: obj.Size
-        });
-      }
-    }
-
-    res.status(200).json({
-      success: true,
-      data: response.sort((a, b) => a.startTime - b.startTime)
-    });
-
-  } catch (error) {
-    console.error("List recordings error:", error);
-    res.status(500).json({
-      success: false,
-      error_message: "Failed to list recordings"
     });
   }
 };
