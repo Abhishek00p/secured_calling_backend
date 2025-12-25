@@ -11,7 +11,8 @@ const {
 router.post('/login', validateLoginRequest, authController.login);
 
 // Protected routes
-router.post('/create-user', [verifyToken, isAdmin, validateCreateUserRequest], authController.createUser);
+router.post('/create-member', [verifyToken, isAdmin, validateCreateUserRequest], authController.createUser);
+router.post('/create-user', [verifyToken, isMember, validateCreateUserRequest], authController.createUserUnderMember);
 router.post('/reset-password', [verifyToken, isAdmin], authController.resetPassword);
 router.get('/user-credentials/:userId', verifyToken, authController.getUserCredentials);
 router.get('/users-for-reset/:currentUserId', [verifyToken, isAdmin], authController.getUsersForPasswordReset);

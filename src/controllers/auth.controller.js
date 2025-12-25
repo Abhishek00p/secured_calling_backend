@@ -203,6 +203,96 @@ exports.createUser = async (req, res) => {
 };
 
 /**
+ * Member creates a new user under same member
+ */
+exports.createUserUnderMember = async (req, res) => {
+  try {
+    const { name, email, password, memberUserId } = req.body;
+
+    // 2️⃣ Fetch member details
+    const memberSnap = await db
+      .collection("users")
+      .doc(memberUserId.userId.toString())
+      .get();
+
+    if (!memberSnap.exists) {
+      return res.status(404).json({
+        success: false,
+        error_message: "Member not found"
+      });
+    }
+
+    const memberData = memberSnap.data();
+
+    if (memberData.isMember !== true) {
+      return res.status(400).json({
+        success: false,
+        error_message: "Provided user is not a member"
+      });
+    }
+
+    // 3️⃣ Check if email already exists
+    const existingUser = await db
+      .collection("users")
+      .where("email", "==", email)
+      .get();
+
+    if (!existingUser.empty) {
+      return res.status(400).json({
+        success: false,
+        error_message: "User with this email already exists"
+      });
+    }
+
+    // 4️⃣ Hash password
+    const hashedPassword = await hashPassword(password);
+    const newUserId = await generateUniqueUserId();
+
+    // 5️⃣ Create user with inherited fields
+    await db.collection("users").doc(newUserId.toString()).set({
+      userId: newUserId,
+      email,
+      name,
+      hashedPassword,
+      password, // ⚠️ remove in production
+      isAdmin: false,
+      isMember: false,
+      memberCode: memberData.memberCode,
+      isActive: true,
+
+      // inherited from member
+      planDays: memberData.planDays,
+      purchaseDate: memberData.purchaseDate,
+      planExpiryDate: memberData.planExpiryDate,
+      subscription: memberData.subscription,
+      maxParticipantsAllowed: memberData.maxParticipantsAllowed,
+
+      // tracking
+      createdByMemberId: currentUser.userId,
+      createdAt: new Date().toISOString()
+    });
+
+    res.status(201).json({
+      success: true,
+      data: {
+        userId: newUserId,
+        email,
+        name,
+        memberCode: memberData.memberCode,
+        createdBy: currentUser.userId
+      }
+    });
+
+  } catch (error) {
+    logger.error("Create user under member error:", error);
+    res.status(500).json({
+      success: false,
+      error_message: "Failed to create user under member"
+    });
+  }
+};
+
+/**
  * Reset Password
  */
 exports.resetPassword = async (req, res) => {
