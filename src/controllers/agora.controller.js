@@ -122,12 +122,29 @@ exports.verifyToken = async (req, res) => {
  */
 const getDocId = (cname, type) => `${cname}_${type}`;
 
+function generate7DigitId() {
+  return Math.floor(1000000 + Math.random() * 9000000); // 1000000 to 9999999
+}
+async function generateUniqueUserId() {
+  let uniqueId;
+  let docExists = true;
+
+  while (docExists) {
+    uniqueId = generate7DigitId();
+    const docRef = db.collection('users').doc(uniqueId.toString());
+    const docSnap = await docRef.get();
+    docExists = docSnap.exists; // true if ID already exists
+  }
+
+  return uniqueId;
+}
 /**
  * Start Cloud Recording
  */
 exports.startCloudRecording = async (req, res) => {
   try {
-    const { cname, uid, type = 'mix', token } = req.body;
+    const { cname, type = 'mix', token } = req.body;
+    const uid = await generateUniqueUserId();
 
     // Acquire recording resource
     const acquireResponse = await axios.post(
