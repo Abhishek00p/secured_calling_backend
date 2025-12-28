@@ -152,7 +152,7 @@ exports.startCloudRecording = async (req, res) => {
     const { cname, type = 'mix' } = req.body;
 
     const uid = type === 'mix' ? 9999999 : 9999998;
-    const token = await createAgoraToken({ channelName: cname, uid, role: 'subscriber' });
+    const { token } = await createAgoraToken({ channelName: cname, uid, role: 'subscriber' });
     // Acquire recording resource
     const acquireResponse = await axios.post(
       `${BASE_URL}/acquire`,
