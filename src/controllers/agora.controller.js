@@ -12,59 +12,65 @@ const AUTH_HEADER = "Basic " + Buffer.from(
   `${AGORA_CONFIG.customerId}:${AGORA_CONFIG.customerCert}`
 ).toString("base64");
 
+
+async function createAgoraToken({ channelName, uid, role = 'publisher' }) {
+  if (!AGORA_CONFIG.appId || !AGORA_CONFIG.appCertificate) {
+    throw new Error('Agora credentials not configured');
+  }
+
+  const expirationTimeInSeconds = 3600;
+  const currentTimestamp = Math.floor(Date.now() / 1000);
+  const privilegeExpiredTs = currentTimestamp + expirationTimeInSeconds;
+
+  const token = RtcTokenBuilder.buildTokenWithUid(
+    AGORA_CONFIG.appId,
+    AGORA_CONFIG.appCertificate,
+    channelName,
+    uid,
+    role === 'publisher' ? RtcRole.PUBLISHER : RtcRole.SUBSCRIBER,
+    privilegeExpiredTs
+  );
+
+  await db.collection('meetings').doc(channelName).update({
+    [`tokens.${uid}`]: {
+      token,
+      uid,
+      role,
+      expiry_time: privilegeExpiredTs,
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(privilegeExpiredTs * 1000).toISOString()
+    }
+  });
+
+  return {
+    token,
+    expiry: privilegeExpiredTs
+  };
+}
+
 /**
  * Generate Agora Token
  */
 exports.generateToken = async (req, res) => {
   try {
-    const { channelName, uid, role = 'publisher' } = req.body;
+    const { channelName, uid, role } = req.body;
 
-    if (!AGORA_CONFIG.appId || !AGORA_CONFIG.appCertificate) {
-      return res.status(500).json({
-        success: false,
-        error_message: 'Agora credentials not configured'
-      });
-    }
-
-    // Set token expiration time (1 hour)
-    const expirationTimeInSeconds = 3600;
-    const currentTimestamp = Math.floor(Date.now() / 1000);
-    const privilegeExpiredTs = currentTimestamp + expirationTimeInSeconds;
-
-    // Build token
-    const token = RtcTokenBuilder.buildTokenWithUid(
-      AGORA_CONFIG.appId,
-      AGORA_CONFIG.appCertificate,
-      channelName,
-      uid,
-      role === 'publisher' ? RtcRole.PUBLISHER : RtcRole.SUBSCRIBER,
-      privilegeExpiredTs
-    );
-
-    // Store token in Firestore
-    await db.collection('meetings').doc(channelName).update({
-      [`tokens.${uid}`]: {
-        token,
-        uid,
-        role,
-        expiry_time: privilegeExpiredTs,
-        createdAt: new Date().toISOString(),
-        expiresAt: new Date(privilegeExpiredTs * 1000).toISOString()
-      }
-    });
+    const result = await createAgoraToken({ channelName, uid, role });
 
     res.status(200).json({
       success: true,
-      data: { token }
+      data: result
     });
   } catch (error) {
     logger.error('Generate token error:', error);
+
     res.status(500).json({
       success: false,
-      error_message: 'Failed to generate token'
+      error_message: error.message || 'Failed to generate token'
     });
   }
 };
+
 
 /**
  * Verify Agora Token
@@ -146,7 +152,7 @@ exports.startCloudRecording = async (req, res) => {
     const { cname, type = 'mix' } = req.body;
 
     const uid = type === 'mix' ? 9999999 : 9999998;
-    const token = await this.generateToken(cname, uid, 'subscriber');
+    const token = await createAgoraToken({ channelName: cname, uid, role: 'subscriber' });
     // Acquire recording resource
     const acquireResponse = await axios.post(
       `${BASE_URL}/acquire`,
