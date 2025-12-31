@@ -705,7 +705,7 @@ function findRecordingForTrack(track, recordings) {
  */
 exports.getIndividualMixRecording = async (req, res) => {
   try {
-    const { channelName, prefix } = req.body;
+    const { channelName } = req.body;
 
     // 1️⃣ Validation
     if (!channelName) {
@@ -716,7 +716,7 @@ exports.getIndividualMixRecording = async (req, res) => {
     }
 
     // 2️⃣ Fetch recordings
-    const recordings = await getMixRecordingsList({ channelName, prefix });
+    const recordings = await getMixRecordingsList({ channelName });
     if (!recordings.length) {
       return res.status(200).json({
         success: true,
