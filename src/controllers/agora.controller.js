@@ -623,7 +623,7 @@ async function getMixRecordingsList({
           if (recordingDate) break;
         }
       }
-      const recordingEpoch = recordingDate.getTime();
+      const recordingEpoch = recordingDate ? recordingDate.getTime() : null;
 
       return {
         key: obj.Key,
@@ -735,6 +735,7 @@ exports.getIndividualMixRecording = async (req, res) => {
         rec.recordingTime >= track.startTime &&
         rec.recordingTime <= track.stopTime
       );
+      console.log("recording match ? ", matchedRecording);
 
       if (!matchedRecording) continue;
 
@@ -746,7 +747,7 @@ exports.getIndividualMixRecording = async (req, res) => {
         trackStartTime: track.startTime,
         trackStopTime: track.stopTime
       }));
-
+      console.log("enrichedSpeakingEvents length", enrichedSpeakingEvents.length);
       usersList.push({
         trackId: track.id || null,
         recordingUrl: playableUrl,
