@@ -526,134 +526,251 @@ function extractRecordingTimeFromKey(key) {
 }
 
 
-/**
- * List Recordings from R2 filtered by channel name
- */
+async function getMixRecordingsList({
+  channelName,
+  prefix = "recordings/mix/",
+}) {
+  if (!channelName) {
+    throw new Error("channelName is required");
+  }
+
+  // 1. List objects
+  const data = await s3.send(
+    new ListObjectsV2Command({
+      Bucket: STORAGE_CONFIG.bucketName,
+      Prefix: prefix,
+    })
+  );
+
+  // 2. Filter m3u8 files
+  const files = (data.Contents || []).filter(
+    (obj) =>
+      obj.Key.includes(channelName) &&
+      obj.Key.endsWith(".m3u8")
+  );
+
+  if (!files.length) {
+    return [];
+  }
+
+  // 3. Process playlists
+  return Promise.all(
+    files.map(async (obj) => {
+      const playlistResp = await s3.send(
+        new GetObjectCommand({
+          Bucket: STORAGE_CONFIG.bucketName,
+          Key: obj.Key,
+        })
+      );
+
+      const playlistText =
+        await playlistResp.Body.transformToString("utf-8");
+
+      const lines = playlistText.split("\n");
+      const basePath = obj.Key.substring(
+        0,
+        obj.Key.lastIndexOf("/") + 1
+      );
+
+      const updatedLines = await Promise.all(
+        lines.map(async (line) => {
+          if (line.endsWith(".ts")) {
+            return getSignedUrl(
+              s3,
+              new GetObjectCommand({
+                Bucket: STORAGE_CONFIG.bucketName,
+                Key: basePath + line,
+              }),
+              { expiresIn: 3600 }
+            );
+          }
+          return line;
+        })
+      );
+
+      const updatedPlaylist = updatedLines.join("\n");
+      const newKey = `secure/${Date.now()}_${obj.Key.split("/").pop()}`;
+
+      // Upload rewritten playlist
+      await s3.send(
+        new PutObjectCommand({
+          Bucket: STORAGE_CONFIG.bucketName,
+          Key: newKey,
+          Body: updatedPlaylist,
+          ContentType: "application/vnd.apple.mpegurl",
+        })
+      );
+
+      const signedM3u8Url = await getSignedUrl(
+        s3,
+        new GetObjectCommand({
+          Bucket: STORAGE_CONFIG.bucketName,
+          Key: newKey,
+        }),
+        { expiresIn: 3600 }
+      );
+
+      let recordingDate = null;
+
+      for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line || line.startsWith("#")) continue;
+
+        if (line.includes(".ts")) {
+          recordingDate = extractRecordingTimeFromKey(
+            line.split("?")[0]
+          );
+          if (recordingDate) break;
+        }
+      }
+      const recordingEpoch = recordingDate.getTime();
+
+      return {
+        key: obj.Key,
+        playableUrl: signedM3u8Url,
+        lastModified: obj.LastModified,
+        size: obj.Size,
+        recordingTime: recordingEpoch,
+      };
+    })
+  );
+}
+
 exports.listMixRecordings = async (req, res) => {
   try {
-    const { channelName, prefix = 'recordings/mix/' } = req.body;
+    const { channelName, prefix = "recordings/mix/" } = req.body;
 
     if (!channelName) {
       return res.status(400).json({
         success: false,
-        error_message: 'channelName is required'
+        error_message: "channelName is required",
       });
     }
 
-    // List objects
-    const params = {
-      Bucket: STORAGE_CONFIG.bucketName,
-      Prefix: prefix,
-    };
-    const data = await s3.send(new ListObjectsV2Command(params));
+    const recordings = await getMixRecordingsList({
+      channelName,
+      prefix,
+    });
 
-    // Filter only .m3u8 files that match channel
-    const files = (data.Contents || [])
-      .filter(obj =>
-        obj.Key.includes(channelName) && obj.Key.endsWith(".m3u8")
-      );
-
-    if (files.length === 0) {
+    if (!recordings.length) {
       return res.status(404).json({
         success: false,
-        error_message: "No .m3u8 playlist found for the channel"
+        error_message: "No .m3u8 playlist found for the channel",
       });
     }
-
-    // For each .m3u8 file, rewrite the segments into signed URLs
-    const signedPlaylists = await Promise.all(
-      files.map(async (obj) => {
-        const playlistCmd = new GetObjectCommand({
-          Bucket: STORAGE_CONFIG.bucketName,
-          Key: obj.Key,
-        });
-
-        const playlistResp = await s3.send(playlistCmd);
-        const playlistText =
-          await playlistResp.Body.transformToString("utf-8");
-
-        const lines = playlistText.split("\n");
-        const basePath = obj.Key.substring(0, obj.Key.lastIndexOf("/") + 1);
-
-        const updatedLines = await Promise.all(
-          lines.map(async (line) => {
-            if (line.endsWith(".ts")) {
-              const segmentKey = basePath + line;
-              return await getSignedUrl(
-                s3,
-                new GetObjectCommand({
-                  Bucket: STORAGE_CONFIG.bucketName,
-                  Key: segmentKey
-                }),
-                { expiresIn: 3600 }
-              );
-            }
-            return line;
-          })
-        );
-
-        const updatedPlaylist = updatedLines.join("\n");
-        const newKey = `secure/${Date.now()}_${obj.Key.split("/").pop()}`;
-
-        // Upload rewritten playlist to R2
-        await s3.send(new PutObjectCommand({
-          Bucket: STORAGE_CONFIG.bucketName,
-          Key: newKey,
-          Body: updatedPlaylist,
-          ContentType: "application/vnd.apple.mpegurl"
-        }));
-
-        const signedM3u8Url = await getSignedUrl(
-          s3,
-          new GetObjectCommand({
-            Bucket: STORAGE_CONFIG.bucketName,
-            Key: newKey
-          }),
-          { expiresIn: 3600 }
-        );
-
-        let recordingDate = null;
-
-        for (const rawLine of lines) {
-          const line = rawLine.trim();
-
-          // skip comments and empty lines
-          if (!line || line.startsWith('#')) continue;
-
-          // allow .ts or .ts?query
-          if (line.includes('.ts')) {
-            recordingDate = extractRecordingTimeFromKey(line.split('?')[0]);
-            if (recordingDate) break;
-          }
-        }
-
-
-        return {
-          key: obj.Key,
-          playableUrl: signedM3u8Url,
-          lastModified: obj.LastModified, // unchanged
-          size: obj.Size,
-          recordingTime: recordingDate
-            ? recordingDate.toISOString()
-            : null,
-        };
-
-      })
-    );
 
     res.status(200).json({
       success: true,
-      data: signedPlaylists
+      data: recordings,
     });
-
   } catch (error) {
     console.error("List recordings error:", error);
+
     res.status(500).json({
       success: false,
-      error_message: 'Failed to list recordings'
+      error_message: "Failed to list recordings",
     });
   }
 };
+
+async function getRecordingTracks(meetingId) {
+  try {
+    const recordingTrackRef = collection(
+      db,
+      "meetings",
+      meetingId,
+      "recordingTrack"
+    );
+
+    const snapshot = await getDocs(recordingTrackRef);
+
+    const recordings = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+    return recordings;
+  } catch (error) {
+    console.error("Error fetching recordingTrack:", error);
+    return [];
+  }
+}
+
+function findRecordingForTrack(track, recordings) {
+  return recordings.find(rec =>
+    rec.recordingTime >= track.startTime &&
+    rec.recordingTime <= track.stopTime
+  );
+}
+/**
+ * Get individual mix recordings with speaking events
+ * POST /api/recordings/individual-mix
+ */
+exports.getIndividualMixRecording = async (req, res) => {
+  try {
+    const { channelName, prefix } = req.body;
+
+    // 1️⃣ Validation
+    if (!channelName) {
+      return res.status(400).json({
+        success: false,
+        message: "channelName is required"
+      });
+    }
+
+    // 2️⃣ Fetch recordings
+    const recordings = await getMixRecordingsList({ channelName, prefix });
+    if (!recordings.length) {
+      return res.status(200).json({
+        success: true,
+        data: []
+      });
+    }
+
+    // 3️⃣ Fetch recording tracks from Firestore
+    const allRecordingTrack = await getRecordingTracks(channelName);
+
+    const usersList = [];
+
+    // 4️⃣ Core mapping logic
+    for (const track of allRecordingTrack) {
+      const matchedRecording = recordings.find(rec =>
+        rec.recordingTime >= track.startTime &&
+        rec.recordingTime <= track.stopTime
+      );
+
+      if (!matchedRecording) continue;
+
+      const { playableUrl } = matchedRecording;
+
+      const enrichedSpeakingEvents = (track.speakingEvents || []).map(event => ({
+        ...event,
+        recordingUrl: playableUrl,
+        trackStartTime: track.startTime,
+        trackStopTime: track.stopTime
+      }));
+
+      usersList.push({
+        trackId: track.id || null,
+        recordingUrl: playableUrl,
+        speakingEvents: enrichedSpeakingEvents
+      });
+    }
+
+    // 5️⃣ Success response
+    return res.status(200).json({
+      success: true,
+      data: usersList
+    });
+
+  } catch (error) {
+    console.error("getIndividualMixRecording error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch individual mix recordings",
+      error: error.message
+    });
+  }
+};
+
 
 
 exports.listIndividualRecordings = async (req, res) => {
