@@ -3,7 +3,7 @@ const axios = require('axios');
 const { db } = require('../config/firebase');
 const { AGORA_CONFIG, STORAGE_CONFIG } = require('../config/env');
 const { logger } = require('../middlewares/logging.middleware');
-const { S3Client, GetObjectCommand, PutObjectCommand, ListObjectsV2Command } = require("@aws-sdk/client-s3");
+const { S3Client, GetObjectCommand, PutObjectCommand, ListObjectsV2Command, DeleteObjectCommand } = require("@aws-sdk/client-s3");
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 
 
@@ -530,6 +530,7 @@ async function getMixRecordingsList({
   channelName,
   prefix = "recordings/mix/",
 }) {
+  await deleteOldSecureFiles();
   if (!channelName) {
     throw new Error("channelName is required");
   }
@@ -675,14 +676,11 @@ exports.listMixRecordings = async (req, res) => {
 
 async function getRecordingTracks(meetingId) {
   try {
-    const recordingTrackRef = collection(
-      db,
-      "meetings",
-      meetingId,
-      "recordingTrack"
-    );
-
-    const snapshot = await getDocs(recordingTrackRef);
+    const snapshot = await db
+      .collection("meetings")
+      .doc(meetingId)
+      .collection("recordingTrack")
+      .get();
 
     const recordings = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
@@ -731,10 +729,14 @@ exports.getIndividualMixRecording = async (req, res) => {
 
     // 4️⃣ Core mapping logic
     for (const track of allRecordingTrack) {
-      const matchedRecording = recordings.find(rec =>
-        rec.recordingTime >= track.startTime &&
-        rec.recordingTime <= track.stopTime
+      const matchedRecording = recordings.find(rec => {
+        console.log(`recording time ${rec.recordingTime}, trackStart : ${track.startTime}, trackEnd: ${track.stopTime}`);
+        const ONE_MINUTE_MS = 60 * 1000;
+        return rec.recordingTime >= (track.startTime - ONE_MINUTE_MS) &&
+          rec.recordingTime <= track.stopTime;
+      }
       );
+
       console.log("recording match ? ", matchedRecording);
 
       if (!matchedRecording) continue;
@@ -1123,6 +1125,66 @@ exports.getRecordingsByUserId = async (req, res) => {
     res.status(500).json({
       success: false,
       error_message: "Failed to build user speaking timeline",
+    });
+  }
+};
+
+exports.cleanupSecureFiles = async (req, res) => {
+  try {
+
+    const FIVE_DAYS_MS = 5 * 24 * 60 * 60 * 1000;
+    const cutoffTime = Date.now() - FIVE_DAYS_MS;
+
+    let isTruncated = true;
+    let continuationToken;
+    let deletedCount = 0;
+
+    while (isTruncated) {
+      const listResp = await s3.send(
+        new ListObjectsV2Command({
+          Bucket: STORAGE_CONFIG.bucketName,
+          Prefix: "secure/", // 🔥 only secure folder
+          ContinuationToken: continuationToken
+        })
+      );
+
+      const objects = listResp.Contents || [];
+
+      for (const obj of objects) {
+        if (!obj.LastModified) continue;
+
+        const lastModifiedTime = new Date(obj.LastModified).getTime();
+
+        if (lastModifiedTime < cutoffTime) {
+          await s3.send(
+            new DeleteObjectCommand({
+              Bucket: STORAGE_CONFIG.bucketName,
+              Key: obj.Key
+            })
+          );
+
+          deletedCount++;
+          console.log("Deleted:", obj.Key);
+        }
+      }
+
+      isTruncated = listResp.IsTruncated;
+      continuationToken = listResp.NextContinuationToken;
+    }
+
+    return res.status(200).json({
+      success: true,
+      deletedFiles: deletedCount,
+      message: "Cleanup completed"
+    });
+
+  } catch (error) {
+    console.error("Cleanup error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Cleanup failed",
+      error: error.message
     });
   }
 };
