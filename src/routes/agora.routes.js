@@ -5,7 +5,7 @@ const { verifyToken } = require('../middlewares/auth.middleware');
 const { validateAgoraTokenRequest, validateRecordingRequest } = require('../middlewares/validation.middleware');
 
 // Token management
-router.post('/token', [verifyToken, validateAgoraTokenRequest], agoraController.generateToken);
+router.post('/token', [validateAgoraTokenRequest], agoraController.generateToken);
 router.post('/verify-token', validateAgoraTokenRequest, agoraController.verifyToken);
 
 // Recording management
