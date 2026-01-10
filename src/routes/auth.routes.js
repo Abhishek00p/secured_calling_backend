@@ -9,6 +9,8 @@ const {
 
 // Public routes
 router.post('/login', validateLoginRequest, authController.login);
+router.get('/generateLoginToken', authController.generateJwtToken);
+router.get('/refreshLoginToken', authController.refreshJwtToken);
 
 // Protected routes
 router.post('/create-member', [verifyToken, isAdmin, validateCreateUserRequest], authController.createUser);

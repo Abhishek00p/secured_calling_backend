@@ -12,6 +12,8 @@ const AUTH_HEADER = "Basic " + Buffer.from(
   `${AGORA_CONFIG.customerId}:${AGORA_CONFIG.customerCert}`
 ).toString("base64");
 
+const MAX_DURATION_MS = 3 * 60 * 60 * 1000; // 3 hours
+
 
 async function createAgoraToken({ channelName, uid, role = 'publisher' }) {
   if (!AGORA_CONFIG.appId || !AGORA_CONFIG.appCertificate) {
@@ -262,7 +264,7 @@ exports.startCloudRecording = async (req, res) => {
       sid: startResponse.data.sid,
       recorderUid: uid,
       status: 'started',
-      startedAt: new Date().toISOString(),
+      startedAt: Date.now(),
       startResponse: startResponse.data
     });
 
@@ -530,7 +532,7 @@ async function getMixRecordingsList({
   channelName,
   prefix = "recordings/mix/",
 }) {
-  await deleteOldSecureFiles();
+
   if (!channelName) {
     throw new Error("channelName is required");
   }
@@ -673,7 +675,6 @@ exports.listMixRecordings = async (req, res) => {
     });
   }
 };
-
 async function getRecordingTracks(meetingId) {
   try {
     const snapshot = await db
@@ -682,11 +683,33 @@ async function getRecordingTracks(meetingId) {
       .collection("recordingTrack")
       .get();
 
-    const recordings = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    const tracks = await Promise.all(
+      snapshot.docs.map(async (doc) => {
+        const trackData = { id: doc.id, ...doc.data() };
 
-    return recordings;
+        const eventsSnap = await db
+          .collection("meetings")
+          .doc(meetingId)
+          .collection("recordingTrack")
+          .doc(doc.id)
+          .collection("speakingEvents")
+          .get();
+
+        const speakingEvents = eventsSnap.docs.map(e => ({
+          id: e.id,
+          ...e.data()
+        }));
+
+        return {
+          ...trackData,
+          speakingEvents,
+        };
+      })
+    );
+
+    return tracks;
   } catch (error) {
-    console.error("Error fetching recordingTrack:", error);
+    console.error("Error fetching recordingTrack with speakingEvents:", error);
     return [];
   }
 }
@@ -694,7 +717,7 @@ async function getRecordingTracks(meetingId) {
 function findRecordingForTrack(track, recordings) {
   return recordings.find(rec =>
     rec.recordingTime >= track.startTime &&
-    rec.recordingTime <= track.stopTime
+    rec.recordingTime <= track.xstopTime
   );
 }
 /**
@@ -742,7 +765,7 @@ exports.getIndividualMixRecording = async (req, res) => {
       if (!matchedRecording) continue;
 
       const { playableUrl } = matchedRecording;
-
+      console.log("speaking events total length", track);
       const enrichedSpeakingEvents = (track.speakingEvents || []).map(event => ({
         ...event,
         recordingUrl: playableUrl,
@@ -751,7 +774,7 @@ exports.getIndividualMixRecording = async (req, res) => {
       }));
       console.log("enrichedSpeakingEvents length", enrichedSpeakingEvents.length);
       usersList.push({
-        trackId: track.id || null,
+        trackId: Number.isInteger(Number(track.id)) ? Number(track.id) : null,
         recordingUrl: playableUrl,
         speakingEvents: enrichedSpeakingEvents
       });
@@ -1186,5 +1209,78 @@ exports.cleanupSecureFiles = async (req, res) => {
       message: "Cleanup failed",
       error: error.message
     });
+  }
+};
+
+async function stopAgoraRecordingInternal({ cname, type, resourceId, sid, recorderUid }) {
+  const stopResponse = await axios.post(
+    `${BASE_URL}/resourceid/${resourceId}/sid/${sid}/mode/${type}/stop`,
+    {
+      cname,
+      uid: recorderUid.toString(),
+      clientRequest: {}
+    },
+    { headers: { Authorization: AUTH_HEADER } }
+  );
+
+  return stopResponse.data;
+}
+exports.autoStopExpiredMeetingsRecordings = async () => {
+  const now = Date.now();
+
+  const snapshot = await db
+    .collection('recordings')
+    .where('status', '==', 'started')
+    .get();
+
+  for (const doc of snapshot.docs) {
+    const recording = doc.data();
+
+    try {
+      const meetingSnap = await db
+        .collection('meetings')
+        .doc(recording.cname.toString())
+        .get();
+
+      if (!meetingSnap.exists) continue;
+
+      const meeting = meetingSnap.data();
+
+      const scheduledEnd = new Date(meeting.scheduledEndTime).getTime();
+      const actualEnd = meeting.actualEndTime
+        ? new Date(meeting.actualEndTime).getTime()
+        : null;
+
+      const meetingEnded =
+        meeting.status === 'ended' ||
+        actualEnd !== null ||
+        scheduledEnd < now;
+
+      if (!meetingEnded) continue;
+
+      // 🔥 STOP Agora recording
+      await stopAgoraRecordingInternal({
+        cname: recording.cname,
+        type: recording.type,
+        resourceId: recording.resourceId,
+        sid: recording.sid,
+        recorderUid: recording.recorderUid
+      });
+      const stopReason = "MEETING_ENDED"
+      if (now - recording.startedAt > MAX_DURATION_MS) {
+        stopReason = 'MAX_DURATION_EXCEEDED'
+      }
+
+      // 🔥 Update Firestore
+      await doc.ref.update({
+        status: 'auto_stopped',
+        stoppedAt: now,
+        stopReason: stopReason || 'MEETING_ENDED'
+      });
+
+      console.log(`Auto-stopped recording for meeting ${recording.cname}`);
+    } catch (err) {
+      console.error(`Auto-stop failed for ${recording.cname}`, err.message);
+    }
   }
 };

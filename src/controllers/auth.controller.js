@@ -23,11 +23,116 @@ const hashPassword = async (password) => {
   return bcrypt.hash(password, saltRounds);
 };
 
+const isTokenValid = (expiresAt) => {
+  return expiresAt && Date.now() < expiresAt;
+};
+
+
 /**
  * Helper function to verify password
  */
 const verifyPassword = async (password, hashedPassword) => {
   return bcrypt.compare(password, hashedPassword);
+};
+exports.generateJwtToken = async (req, res) => {
+  try {
+    const { userId } = req.query;
+
+    const usersRef = db.collection('users');
+    const snapshot = await usersRef
+      .where('userId', '==', userId)
+      .limit(1)
+      .get();
+
+    if (snapshot.empty) {
+      return res.status(404).json({
+        success: false,
+        error_message: 'User not found',
+      });
+    }
+
+    const userDoc = snapshot.docs[0];
+    const userData = userDoc.data();
+
+    // 🔁 Return existing valid token
+    if (
+      userData.auth?.token &&
+      isTokenValid(userData.auth.expiresAt)
+    ) {
+      return res.status(200).json({
+        success: true,
+        token: userData.auth.token,
+        reused: true,
+      });
+    }
+
+    // 🔐 Generate new token
+    const token = generateToken(userId, userData.role);
+    const expiresAt = Date.now() + 60 * 60 * 1000; // 1 hour
+
+    await userDoc.ref.update({
+      auth: {
+        token,
+        expiresAt,
+      },
+    });
+
+    return res.status(200).json({
+      success: true,
+      token,
+      reused: false,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      error_message: error.message,
+    });
+  }
+};
+
+
+exports.refreshJwtToken = async (req, res) => {
+  try {
+    const { userId } = req.query;
+
+    const usersRef = db.collection('users');
+    const snapshot = await usersRef
+      .where('userId', '==', userId)
+      .limit(1)
+      .get();
+
+    if (snapshot.empty) {
+      return res.status(404).json({
+        success: false,
+        error_message: 'User not found',
+      });
+    }
+
+    const userDoc = snapshot.docs[0];
+    const userData = userDoc.data();
+
+    // 🔄 Always generate new token
+    const token = generateToken(userId, userData.role);
+    const expiresAt = Date.now() + 60 * 60 * 1000;
+
+    await userDoc.ref.update({
+      auth: {
+        token,
+        expiresAt,
+      },
+    });
+
+    return res.status(200).json({
+      success: true,
+      token,
+      refreshed: true,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      error_message: error.message,
+    });
+  }
 };
 
 /**
@@ -79,6 +184,15 @@ exports.login = async (req, res) => {
 
     // Generate token
     const token = generateToken(userDoc.id, userData.isAdmin ? 'admin' : (userData.isMember ? 'member' : 'user'));
+    const expiresAt = Date.now() + 60 * 60 * 1000; // 1 hour
+
+    await userDoc.ref.update({
+      auth: {
+        token,
+        expiresAt,
+      },
+    });
+
     const data = {
       token,
       user: {
