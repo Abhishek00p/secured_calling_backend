@@ -1,7 +1,7 @@
 const { db } = require('../config/firebase');
 const { STORAGE_CONFIG } = require('../config/env');
-const { S3Client, GetObjectCommand, PutObjectCommand, ListObjectsV2Command } = require("@aws-sdk/client-s3");
-const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
+const { S3Client, GetObjectCommand, ListObjectsV2Command } = require("@aws-sdk/client-s3");
+const { getPlaylistUrl } = require('../utils/playlistCache');
 
 const s3 = new S3Client({
   endpoint: STORAGE_CONFIG.cloudflareEndpoint,
@@ -58,9 +58,13 @@ async function getMixRecordingsList({
     return [];
   }
 
-  // 3. Process playlists
+  // 3. Process playlists with caching
   return Promise.all(
     files.map(async (obj) => {
+      // Get playlist URL from cache or generate new
+      const { playableUrl } = await getPlaylistUrl(obj.Key);
+
+      // Extract recording time from original playlist
       const playlistResp = await s3.send(
         new GetObjectCommand({
           Bucket: STORAGE_CONFIG.bucketName,
@@ -68,55 +72,10 @@ async function getMixRecordingsList({
         })
       );
 
-      const playlistText =
-        await playlistResp.Body.transformToString("utf-8");
-
+      const playlistText = await playlistResp.Body.transformToString("utf-8");
       const lines = playlistText.split("\n");
-      const basePath = obj.Key.substring(
-        0,
-        obj.Key.lastIndexOf("/") + 1
-      );
-
-      const updatedLines = await Promise.all(
-        lines.map(async (line) => {
-          if (line.endsWith(".ts")) {
-            return getSignedUrl(
-              s3,
-              new GetObjectCommand({
-                Bucket: STORAGE_CONFIG.bucketName,
-                Key: basePath + line,
-              }),
-              { expiresIn: 3600 }
-            );
-          }
-          return line;
-        })
-      );
-
-      const updatedPlaylist = updatedLines.join("\n");
-      const newKey = `secure/${Date.now()}_${obj.Key.split("/").pop()}`;
-
-      // Upload rewritten playlist
-      await s3.send(
-        new PutObjectCommand({
-          Bucket: STORAGE_CONFIG.bucketName,
-          Key: newKey,
-          Body: updatedPlaylist,
-          ContentType: "application/vnd.apple.mpegurl",
-        })
-      );
-
-      const signedM3u8Url = await getSignedUrl(
-        s3,
-        new GetObjectCommand({
-          Bucket: STORAGE_CONFIG.bucketName,
-          Key: newKey,
-        }),
-        { expiresIn: 3600 }
-      );
 
       let recordingDate = null;
-
       for (const rawLine of lines) {
         const line = rawLine.trim();
         if (!line || line.startsWith("#")) continue;
@@ -132,7 +91,7 @@ async function getMixRecordingsList({
 
       return {
         key: obj.Key,
-        playableUrl: signedM3u8Url,
+        playableUrl,
         lastModified: obj.LastModified,
         size: obj.Size,
         recordingTime: recordingEpoch,
@@ -394,45 +353,8 @@ exports.listIndividualRecordings = async (req, res) => {
           }
         }
 
-        const basePath = file.Key.replace(fileName, "");
-
-        // Convert TS file names → signed URLs
-        const rewritten = await Promise.all(
-          lines.map(async (line) => {
-            if (line.endsWith(".ts")) {
-              const segKey = basePath + line;
-              return await getSignedUrl(
-                s3,
-                new GetObjectCommand({
-                  Bucket: STORAGE_CONFIG.bucketName,
-                  Key: segKey
-                }),
-                { expiresIn: 3600 }
-              );
-            }
-            return line;
-          })
-        );
-
-        const finalPlaylist = rewritten.join("\n");
-        const secureKey = `secure/${Date.now()}_${fileName}`;
-
-        // Upload secure playlist
-        await s3.send(new PutObjectCommand({
-          Bucket: STORAGE_CONFIG.bucketName,
-          Key: secureKey,
-          Body: finalPlaylist,
-          ContentType: "application/vnd.apple.mpegurl"
-        }));
-
-        const signedPlaylistUrl = await getSignedUrl(
-          s3,
-          new GetObjectCommand({
-            Bucket: STORAGE_CONFIG.bucketName,
-            Key: secureKey,
-          }),
-          { expiresIn: 3600 }
-        );
+        // Get playlist URL from cache or generate new
+        const { playableUrl: signedPlaylistUrl } = await getPlaylistUrl(file.Key);
 
         return {
           userId: userId,
@@ -573,47 +495,8 @@ exports.getRecordingsByUserId = async (req, res) => {
       const playlistData =
         await playlistResp.Body.transformToString("utf-8");
 
-      const lines = playlistData.split("\n");
-
-      // Replace TS with signed URLs
-      const rewritten = await Promise.all(
-        lines.map(async (line) => {
-          if (line.endsWith(".ts")) {
-            const segKey = basePath + line;
-            return await getSignedUrl(
-              s3,
-              new GetObjectCommand({
-                Bucket: STORAGE_CONFIG.bucketName,
-                Key: segKey,
-              }),
-              { expiresIn: 3600 }
-            );
-          }
-          return line;
-        })
-      );
-
-      const finalPlaylist = rewritten.join("\n");
-
-      const secureKey = `secure/${Date.now()}_${fileName}`;
-
-      await s3.send(
-        new PutObjectCommand({
-          Bucket: STORAGE_CONFIG.bucketName,
-          Key: secureKey,
-          Body: finalPlaylist,
-          ContentType: "application/vnd.apple.mpegurl",
-        })
-      );
-
-      const signedPlaylistUrl = await getSignedUrl(
-        s3,
-        new GetObjectCommand({
-          Bucket: STORAGE_CONFIG.bucketName,
-          Key: secureKey,
-        }),
-        { expiresIn: 3600 }
-      );
+      // Get playlist URL from cache or generate new
+      const { playableUrl: signedPlaylistUrl } = await getPlaylistUrl(file.Key);
 
       // 4️⃣ Map speaking events to this playlist
       for (const event of speakingEvents) {
