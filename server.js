@@ -57,6 +57,39 @@ app.use((err, req, res, next) => {
   });
 });
 
+
+app.post('/agora-webhook', async (req, res) => {
+  try {
+    const { eventType, errorCode, ...rest } = req.body;
+    const timestamp = Date.now();
+
+    const docId = `${timestamp}_${eventType || 'unknown'}`;
+    const data = {
+      eventType: eventType || null,
+      errorCode: errorCode || null,
+      eventData: rest || {},
+      receivedAt: admin.firestore.Timestamp.fromMillis(timestamp),
+      readableTime: new Date(timestamp).toLocaleString("en-IN", {
+        timeZone: "Asia/Kolkata",
+      }),
+    };
+
+    // Respond immediately to Agora
+    res.status(200).send("OK");
+
+    // Save asynchronously
+    db.collection('agora_webhook_error')
+      .doc(docId)
+      .set(data)
+      .then(() => console.log("Webhook event stored:", docId))
+      .catch((err) => console.error("Firestore write error:", err));
+
+  } catch (e) {
+    console.error("Webhook processing error:", e);
+    res.status(500).send("Internal Server Error");
+  }
+});
+
 // Start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
