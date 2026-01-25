@@ -260,7 +260,7 @@ exports.getIndividualMixRecording = async (req, res) => {
         console.log(`recording time ${rec.recordingTime}, trackStart : ${track.startTime}, trackEnd: ${track.stopTime}`);
         const ONE_MINUTE_MS = 60 * 1000;
         return rec.recordingTime >= (track.startTime - ONE_MINUTE_MS) &&
-          rec.recordingTime <= track.stopTime;
+          rec.recordingTime <= track.stopTime + ONE_MINUTE_MS;
       }
       );
 
