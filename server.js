@@ -91,7 +91,7 @@ app.post('/agora-webhook', async (req, res) => {
 
     // Respond immediately to Agora
     res.status(200).send("OK");
-
+    const db = admin.firestore();
     // Save asynchronously
     db.collection('agora_webhook_error')
       .doc(docId)
