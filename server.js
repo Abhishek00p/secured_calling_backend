@@ -100,6 +100,50 @@ app.post('/agora-webhook', async (req, res) => {
       .then(() => console.log("Webhook event stored:", docId))
       .catch((err) => console.error("Firestore write error:", err));
 
+    // recording started
+    if (eventType == 40) {
+      if (rest.payload.cname) {
+        const startTime = rest.payload.notifyMs;
+        db.collection("meetings").doc(rest.payload.cname).collection('recordingTrack').doc(startTime.toString()).set({
+          "startTime": startTime,
+          "mix": true,
+        });
+      }
+    } else if (eventType == 41) {
+      // recording stopped
+      if (rest.payload?.cname) {
+        const cname = rest.payload.cname;
+        const stopTime = rest.payload.notifyMs;
+
+        const trackRef = db
+          .collection("meetings")
+          .doc(cname)
+          .collection("recordingTrack");
+
+        // Find the active recording (no stopTime yet)
+        const snap = await trackRef
+          .where("stopTime", "==", null)
+          .limit(1)
+          .get();
+
+        if (!snap.empty) {
+          const doc = snap.docs[0];
+          const startTime = doc.id; // or doc.data().startTime if you store it
+
+          await trackRef.doc(startTime).update({
+            stopTime: stopTime,
+            mix: true,
+          });
+
+          console.log(`Recording stopped for ${cname}, startTime=${startTime}`);
+        } else {
+          console.warn(`No active recordingTrack found for ${cname}`);
+        }
+      }
+    }
+
+
+
   } catch (e) {
     logger.error("Webhook processing error:", e);
     res.status(500).send("Internal Server Error");
