@@ -104,7 +104,7 @@ app.post('/agora-webhook', async (req, res) => {
     if (eventType == 40) {
       console.log("Recording started event received");
       if (rest.payload.cname) {
-        const startTime = rest.payload.notifyMs;
+        const startTime = rest.notifyMs;
         db.collection("meetings").doc(rest.payload.cname).collection('recordingTrack').doc(startTime.toString()).set({
           "startTime": startTime,
           "mix": true,
@@ -116,7 +116,7 @@ app.post('/agora-webhook', async (req, res) => {
       // recording stopped
       if (rest.payload?.cname) {
         const cname = rest.payload.cname;
-        const stopTime = rest.payload.notifyMs;
+        const stopTime = rest.notifyMs;
 
         const trackRef = db
           .collection("meetings")
