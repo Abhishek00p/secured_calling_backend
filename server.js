@@ -38,11 +38,26 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument, {
   customSiteTitle: 'Secured Agora Calling App API Documentation'
 }));
 
-// Request logging middleware
+//Logger
 app.use((req, res, next) => {
-  logger.info(`${req.method} ${req.url}`);
+  const start = Date.now();
+
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+
+    logger.info({
+      time: new Date().toISOString(),
+      method: req.method,
+      path: req.originalUrl,
+      status: res.statusCode,
+      durationMs: duration,
+      ip: req.ip,
+    });
+  });
+
   next();
 });
+
 
 // Routes
 app.use('/api/auth', require('./src/routes/auth.routes'));
