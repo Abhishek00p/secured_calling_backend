@@ -100,7 +100,7 @@ app.post('/agora-webhook', async (req, res) => {
       .catch((err) => console.error("Firestore write error:", err));
 
   } catch (e) {
-    console.error("Webhook processing error:", e);
+    logger.error("Webhook processing error:", e);
     res.status(500).send("Internal Server Error");
   }
 });
