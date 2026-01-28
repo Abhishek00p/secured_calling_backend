@@ -68,7 +68,15 @@ exports.verifyToken = async (req, res) => {
   try {
     const { channelName, uid } = req.body;
 
-    const meetingDoc = await db.collection('meetings')
+    if (!channelName || !uid) {
+      return res.status(400).json({
+        success: false,
+        error_message: 'channelName and uid are required'
+      });
+    }
+
+    const meetingDoc = await db
+      .collection('meetings')
       .doc(channelName)
       .get();
 
@@ -80,32 +88,48 @@ exports.verifyToken = async (req, res) => {
     }
 
     const meetingData = meetingDoc.data();
-    const expiresAt = new Date(meetingData.expiresAt);
 
-    if (expiresAt < new Date()) {
-      return res.status(401).json({
+    if (!meetingData.tokens) {
+      return res.status(400).json({
         success: false,
-        error_message: 'Token expired'
+        error_message: 'No tokens found for this meeting'
       });
     }
 
-    if (meetingData.uid !== uid) {
+    const userTokenData = meetingData.tokens[String(uid)];
+
+    if (!userTokenData) {
       return res.status(401).json({
         success: false,
-        error_message: 'Invalid user ID'
+        error_message: 'No token for this user'
       });
     }
 
-    res.status(200).json({
+    const { expiry_time, token } = userTokenData;
+
+    if (!expiry_time || !token) {
+      return res.status(400).json({
+        success: false,
+        error_message: 'Invalid token data'
+      });
+    }
+
+    if (Date.now() > Number(expiry_time)) {
+      return res.status(401).json({
+        success: false,
+        error_message: 'Agora Token expired'
+      });
+    }
+
+    return res.status(200).json({
       success: true,
       data: {
-        token: meetingData.token,
-        role: meetingData.role
+        token
       }
     });
   } catch (error) {
     logger.error('Verify token error:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error_message: 'Failed to verify token'
     });

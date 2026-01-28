@@ -17,7 +17,7 @@ const verifyToken = async (req, res, next) => {
     }
 
     const decoded = jwt.verify(token, JWT_SECRET);
-    
+
     // Get user from Firestore
     const userDoc = await admin.firestore()
       .collection('users')
@@ -32,7 +32,7 @@ const verifyToken = async (req, res, next) => {
     }
 
     const userData = userDoc.data();
-    
+
     // Check if user is active
     if (userData.isActive === false) {
       return res.status(401).json({
@@ -59,7 +59,7 @@ const verifyToken = async (req, res, next) => {
     if (error.name === 'TokenExpiredError') {
       return res.status(401).json({
         success: false,
-        error_message: 'Token expired'
+        error_message: 'JWT Token expired'
       });
     }
     return res.status(500).json({

@@ -17,19 +17,16 @@ components:
       bearerFormat: JWT
 
   schemas:
-    Error:
+    ApiError:
       type: object
       properties:
-        error:
-          type: object
-          properties:
-            code:
-              type: string
-            message:
-              type: string
-          required:
-            - code
-            - message
+        success:
+          type: boolean
+          example: false
+        error_message:
+          type: string
+        message:
+          type: string
 
     LoginRequest:
       type: object
@@ -47,26 +44,43 @@ components:
     LoginResponse:
       type: object
       properties:
-        token:
-          type: string
-        user:
+        success:
+          type: boolean
+        data:
           type: object
           properties:
-            uid:
+            token:
               type: string
-            email:
-              type: string
-            role:
-              type: string
-          required:
-            - uid
-            - email
-            - role
-      required:
-        - token
-        - user
+            user:
+              type: object
+              properties:
+                userId:
+                  type: string
+                email:
+                  type: string
+                name:
+                  type: string
+                isAdmin:
+                  type: boolean
+                isMember:
+                  type: boolean
+                memberCode:
+                  type: string
+                  nullable: true
 
-    CreateUserRequest:
+    GenerateTokenResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        token:
+          type: string
+        reused:
+          type: boolean
+        refreshed:
+          type: boolean
+
+    CreateMemberRequest:
       type: object
       properties:
         email:
@@ -75,40 +89,147 @@ components:
         password:
           type: string
           format: password
-        role:
+        name:
           type: string
-          enum: [admin, member]
+        isAdmin:
+          type: boolean
+          default: false
+        isMember:
+          type: boolean
+          default: false
+        memberCode:
+          type: string
+          nullable: true
+        purchaseDate:
+          type: string
+          format: date-time
+        planDays:
+          type: integer
+        maxParticipantsAllowed:
+          type: integer
       required:
         - email
         - password
-        - role
+        - name
 
-    CreateUserResponse:
+    CreateMemberResponse:
       type: object
       properties:
-        uid:
+        success:
+          type: boolean
+        data:
+          type: object
+          properties:
+            userId:
+              type: string
+            email:
+              type: string
+            name:
+              type: string
+            isAdmin:
+              type: boolean
+            isMember:
+              type: boolean
+            memberCode:
+              type: string
+              nullable: true
+            planDays:
+              type: integer
+
+    CreateUserUnderMemberRequest:
+      type: object
+      properties:
+        name:
           type: string
         email:
           type: string
-        role:
+          format: email
+        password:
+          type: string
+          format: password
+        memberUserId:
           type: string
       required:
-        - uid
+        - name
         - email
-        - role
+        - password
+        - memberUserId
+
+    CreateUserUnderMemberResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          properties:
+            userId:
+              type: string
+            email:
+              type: string
+            name:
+              type: string
+            memberCode:
+              type: string
+            createdBy:
+              type: string
 
     ResetPasswordRequest:
       type: object
       properties:
-        email:
+        userId:
           type: string
-          format: email
         newPassword:
           type: string
           format: password
       required:
-        - email
+        - userId
         - newPassword
+
+    UserCredentialsResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          properties:
+            userId:
+              type: string
+            email:
+              type: string
+            password:
+              type: string
+            name:
+              type: string
+            isAdmin:
+              type: boolean
+            isMember:
+              type: boolean
+            memberCode:
+              type: string
+              nullable: true
+
+    UsersForResetResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              userId:
+                type: string
+              name:
+                type: string
+              email:
+                type: string
+              memberCode:
+                type: string
+              isMember:
+                type: boolean
 
     AgoraTokenRequest:
       type: object
@@ -120,77 +241,162 @@ components:
         role:
           type: string
           enum: [publisher, subscriber]
-        tokenType:
-          type: string
-          enum: [rtc, rtm]
+          default: publisher
       required:
         - channelName
         - uid
-        - role
-        - tokenType
 
     AgoraTokenResponse:
       type: object
       properties:
-        token:
-          type: string
-      required:
-        - token
+        success:
+          type: boolean
+        data:
+          type: object
+          properties:
+            token:
+              type: string
+            expiry:
+              type: integer
+              description: Unix timestamp when token expires
 
-    StartRecordingRequest:
+    VerifyTokenRequest:
       type: object
       properties:
         channelName:
           type: string
         uid:
           type: string
-        token:
-          type: string
       required:
         - channelName
         - uid
-        - token
 
-    StartRecordingResponse:
+    RecordingStartRequest:
       type: object
       properties:
-        resourceId:
+        cname:
           type: string
-        sid:
-          type: string
-      required:
-        - resourceId
-        - sid
-
-    StopRecordingRequest:
-      type: object
-      properties:
-        channelName:
-          type: string
+          description: Channel name
         uid:
           type: string
-        resourceId:
+          description: User ID (optional for mix; system uses recorder UIDs)
+        type:
           type: string
-        sid:
-          type: string
+          enum: [mix, individual]
+          default: mix
       required:
-        - channelName
-        - uid
-        - resourceId
-        - sid
+        - cname
 
-    StopRecordingResponse:
+    RecordingStopRequest:
       type: object
       properties:
-        serverId:
+        cname:
           type: string
-        fileList:
+        type:
+          type: string
+          enum: [mix, individual]
+      required:
+        - cname
+        - type
+
+    RecordingStatusRequest:
+      type: object
+      properties:
+        cname:
+          type: string
+        type:
+          type: string
+          enum: [mix, individual]
+      required:
+        - cname
+        - type
+
+    RecordingUpdateRequest:
+      type: object
+      properties:
+        cname:
+          type: string
+        type:
+          type: string
+          enum: [mix, individual]
+        uid:
+          type: string
+        audioSubscribeUids:
           type: array
           items:
             type: string
+          description: UIDs to subscribe; defaults to #allstream# if empty
       required:
-        - serverId
-        - fileList
+        - cname
+        - type
+        - uid
+
+    ListMixRequest:
+      type: object
+      properties:
+        channelName:
+          type: string
+        prefix:
+          type: string
+          default: "recordings/mix/"
+      required:
+        - channelName
+
+    ListMixRecordingItem:
+      type: object
+      properties:
+        key:
+          type: string
+        playableUrl:
+          type: string
+        lastModified:
+          type: string
+          format: date-time
+        size:
+          type: integer
+        recordingTime:
+          type: integer
+          nullable: true
+        expiresAt:
+          type: integer
+
+    GetIndividualMixRequest:
+      type: object
+      properties:
+        channelName:
+          type: string
+        startTime:
+          type: integer
+          description: Start time (epoch ms)
+        endTime:
+          type: integer
+          description: End time (epoch ms)
+        type:
+          type: string
+      required:
+        - channelName
+        - startTime
+        - endTime
+        - type
+
+    GenericSuccessData:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          description: Agora API response or custom payload
+
+    CleanupResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        deletedFiles:
+          type: integer
+        message:
+          type: string
 
 paths:
   /api/auth/login:
@@ -198,7 +404,7 @@ paths:
       tags:
         - Authentication
       summary: User login
-      description: Authenticate a user and receive a JWT token
+      description: Authenticate with email and password; returns JWT and user info
       requestBody:
         required: true
         content:
@@ -213,24 +419,102 @@ paths:
               schema:
                 $ref: '#/components/schemas/LoginResponse'
         '400':
-          description: Invalid request
+          description: Invalid request or user not properly configured
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                $ref: '#/components/schemas/ApiError'
         '401':
-          description: Invalid credentials
+          description: Invalid password or inactive account
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
 
-  /api/auth/create-user:
+  /api/auth/generateLoginToken:
+    get:
+      tags:
+        - Authentication
+      summary: Generate or reuse JWT
+      description: Generate a JWT for a user by userId. Returns existing valid token if one exists.
+      parameters:
+        - in: query
+          name: userId
+          required: true
+          schema:
+            type: string
+          description: Unique user ID
+      responses:
+        '200':
+          description: Token generated or reused
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerateTokenResponse'
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /api/auth/refreshLoginToken:
+    get:
+      tags:
+        - Authentication
+      summary: Refresh JWT
+      description: Force issue a new JWT for the user (invalidates previous).
+      parameters:
+        - in: query
+          name: userId
+          required: true
+          schema:
+            type: string
+          description: Unique user ID
+      responses:
+        '200':
+          description: Token refreshed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerateTokenResponse'
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /api/auth/create-member:
     post:
       tags:
         - Authentication
-      summary: Create new user
-      description: Create a new user (requires admin privileges)
+      summary: Create member (admin)
+      description: Create a new member. Admin only.
       security:
         - BearerAuth: []
       requestBody:
@@ -238,39 +522,97 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CreateUserRequest'
+              $ref: '#/components/schemas/CreateMemberRequest'
       responses:
         '201':
-          description: User created successfully
+          description: Member created
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/CreateUserResponse'
+                $ref: '#/components/schemas/CreateMemberResponse'
         '400':
-          description: Invalid request
+          description: Invalid request or user already exists
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                $ref: '#/components/schemas/ApiError'
         '401':
           description: Unauthorized
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                $ref: '#/components/schemas/ApiError'
         '403':
-          description: Forbidden - Insufficient privileges
+          description: Forbidden – admin required
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                $ref: '#/components/schemas/ApiError'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /api/auth/create-user:
+    post:
+      tags:
+        - Authentication
+      summary: Create user under member
+      description: Member creates a new user under their member code. Member only.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUserUnderMemberRequest'
+      responses:
+        '201':
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateUserUnderMemberResponse'
+        '400':
+          description: Invalid request, not a member, or email exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden – member required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Member not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
 
   /api/auth/reset-password:
     post:
       tags:
         - Authentication
-      summary: Reset user password
-      description: Reset a user's password (requires admin privileges)
+      summary: Reset password (admin)
+      description: Reset a user's password by userId. Admin only.
       security:
         - BearerAuth: []
       requestBody:
@@ -281,41 +623,140 @@ paths:
               $ref: '#/components/schemas/ResetPasswordRequest'
       responses:
         '200':
-          description: Password reset successful
+          description: Password reset successfully
           content:
             application/json:
               schema:
                 type: object
                 properties:
+                  success:
+                    type: boolean
                   message:
                     type: string
-        '400':
-          description: Invalid request
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
         '401':
           description: Unauthorized
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                $ref: '#/components/schemas/ApiError'
         '403':
-          description: Forbidden - Insufficient privileges
+          description: Forbidden – admin required
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /api/auth/user-credentials/{userId}:
+    get:
+      tags:
+        - Authentication
+      summary: Get user credentials
+      description: Fetch user credentials by userId. Requires valid JWT.
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: userId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: User credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserCredentialsResponse'
+        '400':
+          description: Missing userId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /api/auth/users-for-reset/{currentUserId}:
+    get:
+      tags:
+        - Authentication
+      summary: List users for password reset
+      description: Admin sees all members; member sees users under their member code. Admin/member only.
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: currentUserId
+          required: true
+          schema:
+            type: string
+          description: ID of the admin/member making the request
+      responses:
+        '200':
+          description: List of users
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsersForResetResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Current user not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
 
   /api/agora/token:
     post:
       tags:
         - Agora
-      summary: Generate Agora token
-      description: Generate a token for Agora RTC/RTM
-      security:
-        - BearerAuth: []
+      summary: Generate Agora RTC token
+      description: Generate an Agora RTC token for a channel. No JWT required.
       requestBody:
         required: true
         content:
@@ -324,136 +765,396 @@ paths:
               $ref: '#/components/schemas/AgoraTokenRequest'
       responses:
         '200':
-          description: Token generated successfully
+          description: Token generated
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/AgoraTokenResponse'
         '400':
-          description: Invalid request
+          description: Invalid request (e.g. missing channelName/uid)
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
-        '401':
-          description: Unauthorized
+                $ref: '#/components/schemas/ApiError'
+        '500':
+          description: Server error
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                $ref: '#/components/schemas/ApiError'
 
-  /api/agora/recording/start:
+  /api/agora/verify-token:
     post:
       tags:
         - Agora
-      summary: Start cloud recording
-      description: Start an Agora cloud recording session
-      security:
-        - BearerAuth: []
+      summary: Verify Agora token
+      description: Verify that a valid Agora token exists for the given channel and uid. No JWT required.
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/StartRecordingRequest'
+              $ref: '#/components/schemas/VerifyTokenRequest'
       responses:
         '200':
-          description: Recording started successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StartRecordingResponse'
-        '400':
-          description: Invalid request
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '401':
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /api/agora/recording/stop:
-    post:
-      tags:
-        - Agora
-      summary: Stop cloud recording
-      description: Stop an Agora cloud recording session
-      security:
-        - BearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/StopRecordingRequest'
-      responses:
-        '200':
-          description: Recording stopped successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StopRecordingResponse'
-        '400':
-          description: Invalid request
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        '401':
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /api/agora/recording/status:
-    post:
-      tags:
-        - Agora
-      summary: Query recording status
-      description: Get the status of an Agora cloud recording session
-      security:
-        - BearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/StopRecordingRequest'
-      responses:
-        '200':
-          description: Recording status retrieved successfully
+          description: Token valid
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  serverResponse:
+                  success:
+                    type: boolean
+                  data:
                     type: object
                     properties:
-                      status:
+                      token:
                         type: string
-                      resourceId:
-                        type: string
-                      sid:
-                        type: string
-                      fileList:
-                        type: array
-                        items:
-                          type: string
+        '400':
+          description: Invalid request or no tokens for meeting
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: No token for user or token expired
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Meeting not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /api/agora/recording/start:
+    post:
+      tags:
+        - Agora Recording
+      summary: Start cloud recording
+      description: Start mix or individual cloud recording for a channel. Requires JWT.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecordingStartRequest'
+      responses:
+        '200':
+          description: Recording started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericSuccessData'
         '400':
           description: Invalid request
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                $ref: '#/components/schemas/ApiError'
         '401':
           description: Unauthorized
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                $ref: '#/components/schemas/ApiError'
+        '4xx':
+          description: Agora API error (status/body from Agora)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /api/agora/recording/stop:
+    post:
+      tags:
+        - Agora Recording
+      summary: Stop cloud recording
+      description: Stop an active mix or individual recording. Requires JWT.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecordingStopRequest'
+      responses:
+        '200':
+          description: Recording stopped
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericSuccessData'
+        '400':
+          description: Invalid request or recording already stopped
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: No active recording found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '4xx':
+          description: Agora API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /api/agora/recording/status:
+    post:
+      tags:
+        - Agora Recording
+      summary: Query recording status
+      description: Get status of a cloud recording session. Requires JWT.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecordingStatusRequest'
+      responses:
+        '200':
+          description: Recording status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericSuccessData'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Recording not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '4xx':
+          description: Agora API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /api/agora/recording/update:
+    post:
+      tags:
+        - Agora Recording
+      summary: Update recording subscription
+      description: Update audio subscription (e.g. subscribe UIDs) for an active recording. Requires JWT.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecordingUpdateRequest'
+      responses:
+        '200':
+          description: Recording updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericSuccessData'
+        '400':
+          description: Invalid request or recording already stopped
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: No active recording found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /api/agora/recording/list/mix:
+    post:
+      tags:
+        - Agora Recording
+      summary: List mix recordings
+      description: List mix recordings for a channel with signed playable URLs. Requires JWT.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ListMixRequest'
+      responses:
+        '200':
+          description: List of mix recordings
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ListMixRecordingItem'
+        '400':
+          description: Missing channelName
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: No .m3u8 playlist found for channel
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /api/agora/recording/list/individual:
+    post:
+      tags:
+        - Agora Recording
+      summary: Get individual mix recording by time range
+      description: Fetch a single mix recording whose time range matches startTime/endTime. Requires JWT.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GetIndividualMixRequest'
+      responses:
+        '200':
+          description: Matching recording or null
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    nullable: true
+                    properties:
+                      playableUrl:
+                        type: string
+        '400':
+          description: Missing required fields
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /api/agora/recording/cleanupSecureFiles:
+    post:
+      tags:
+        - Agora Recording
+      summary: Cleanup secure files
+      description: Delete secure/ files older than 5 days. No authentication required.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Cleanup completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CleanupResponse'
+        '500':
+          description: Cleanup failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'

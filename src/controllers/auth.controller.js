@@ -124,7 +124,7 @@ exports.refreshJwtToken = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      token,
+      token: token,
       refreshed: true,
     });
   } catch (error) {
