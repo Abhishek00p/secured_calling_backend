@@ -1,4 +1,5 @@
 const { db } = require('../config/firebase');
+const admin = require('firebase-admin');
 const { STORAGE_CONFIG } = require('../config/env');
 const { S3Client, GetObjectCommand, PutObjectCommand, ListObjectsV2Command } = require("@aws-sdk/client-s3");
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
@@ -30,16 +31,129 @@ function extractRecordingTimeFromKey(key) {
   return new Date(Date.UTC(year, month, day, hour, min, sec, ms));
 }
 
+// async function getMixRecordingsList({
+//   channelName,
+//   prefix = "recordings/mix/",
+// }) {
+
+//   if (!channelName) {
+//     throw new Error("channelName is required");
+//   }
+
+//   // 1. List objects
+//   const data = await s3.send(
+//     new ListObjectsV2Command({
+//       Bucket: STORAGE_CONFIG.bucketName,
+//       Prefix: prefix,
+//     })
+//   );
+
+//   // 2. Filter m3u8 files
+//   const files = (data.Contents || []).filter(
+//     (obj) =>
+//       obj.Key.includes(channelName) &&
+//       obj.Key.endsWith(".m3u8")
+//   );
+
+//   if (!files.length) {
+//     return [];
+//   }
+
+//   // 3. Process playlists
+//   return Promise.all(
+//     files.map(async (obj) => {
+//       const playlistResp = await s3.send(
+//         new GetObjectCommand({
+//           Bucket: STORAGE_CONFIG.bucketName,
+//           Key: obj.Key,
+//         })
+//       );
+
+//       const playlistText =
+//         await playlistResp.Body.transformToString("utf-8");
+
+//       const lines = playlistText.split("\n");
+//       const basePath = obj.Key.substring(
+//         0,
+//         obj.Key.lastIndexOf("/") + 1
+//       );
+
+//       const updatedLines = await Promise.all(
+//         lines.map(async (line) => {
+//           if (line.endsWith(".ts")) {
+//             return getSignedUrl(
+//               s3,
+//               new GetObjectCommand({
+//                 Bucket: STORAGE_CONFIG.bucketName,
+//                 Key: basePath + line,
+//               }),
+//               { expiresIn: 3600 }
+//             );
+//           }
+//           return line;
+//         })
+//       );
+
+//       const updatedPlaylist = updatedLines.join("\n");
+//       const newKey = `secure/${Date.now()}_${obj.Key.split("/").pop()}`;
+
+//       // Upload rewritten playlist
+//       await s3.send(
+//         new PutObjectCommand({
+//           Bucket: STORAGE_CONFIG.bucketName,
+//           Key: newKey,
+//           Body: updatedPlaylist,
+//           ContentType: "application/vnd.apple.mpegurl",
+//         })
+//       );
+
+//       const signedM3u8Url = await getSignedUrl(
+//         s3,
+//         new GetObjectCommand({
+//           Bucket: STORAGE_CONFIG.bucketName,
+//           Key: newKey,
+//         }),
+//         { expiresIn: 3600 }
+//       );
+
+//       let recordingDate = null;
+
+//       for (const rawLine of lines) {
+//         const line = rawLine.trim();
+//         if (!line || line.startsWith("#")) continue;
+
+//         if (line.includes(".ts")) {
+//           recordingDate = extractRecordingTimeFromKey(
+//             line.split("?")[0]
+//           );
+//           if (recordingDate) break;
+//         }
+//       }
+//       const recordingEpoch = recordingDate ? recordingDate.getTime() : null;
+
+//       return {
+//         key: obj.Key,
+//         playableUrl: signedM3u8Url,
+//         lastModified: obj.LastModified,
+//         size: obj.Size,
+//         recordingTime: recordingEpoch,
+//       };
+//     })
+//   );
+// }
+
 async function getMixRecordingsList({
   channelName,
   prefix = "recordings/mix/",
 }) {
-
   if (!channelName) {
     throw new Error("channelName is required");
   }
 
-  // 1. List objects
+  const ONE_HOUR_MS = 3600 * 1000;
+  const now = Date.now();
+
+  // 1️⃣ List objects from S3
   const data = await s3.send(
     new ListObjectsV2Command({
       Bucket: STORAGE_CONFIG.bucketName,
@@ -47,7 +161,7 @@ async function getMixRecordingsList({
     })
   );
 
-  // 2. Filter m3u8 files
+  // 2️⃣ Filter m3u8 files for this channel
   const files = (data.Contents || []).filter(
     (obj) =>
       obj.Key.includes(channelName) &&
@@ -58,9 +172,26 @@ async function getMixRecordingsList({
     return [];
   }
 
-  // 3. Process playlists
+  // 3️⃣ Process playlists
   return Promise.all(
     files.map(async (obj) => {
+      const docId = obj.Key.replace(/\//g, "_");
+      const docRef = db
+        .collection("meetings")
+        .doc(channelName)
+        .collection("recordingUrls")
+        .doc(docId);
+
+      // 🔹 Check Firestore cache
+      const snap = await docRef.get();
+      if (snap.exists) {
+        const cached = snap.data();
+        if (cached.expiresAt && cached.expiresAt > now) {
+          return cached; // reuse valid URL
+        }
+      }
+
+      // 🔄 Regenerate if missing or expired
       const playlistResp = await s3.send(
         new GetObjectCommand({
           Bucket: STORAGE_CONFIG.bucketName,
@@ -115,8 +246,8 @@ async function getMixRecordingsList({
         { expiresIn: 3600 }
       );
 
+      // Extract recording time
       let recordingDate = null;
-
       for (const rawLine of lines) {
         const line = rawLine.trim();
         if (!line || line.startsWith("#")) continue;
@@ -128,18 +259,27 @@ async function getMixRecordingsList({
           if (recordingDate) break;
         }
       }
+
       const recordingEpoch = recordingDate ? recordingDate.getTime() : null;
 
-      return {
+      const payload = {
         key: obj.Key,
         playableUrl: signedM3u8Url,
         lastModified: obj.LastModified,
         size: obj.Size,
         recordingTime: recordingEpoch,
+        expiresAt: now + ONE_HOUR_MS,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
       };
+
+      // Store in Firestore for reuse
+      await docRef.set(payload);
+
+      return payload;
     })
   );
 }
+
 
 exports.listMixRecordings = async (req, res) => {
   try {

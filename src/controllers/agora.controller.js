@@ -18,8 +18,6 @@ module.exports = {
   // Listing / playback
   listMixRecordings: playbackController.listMixRecordings,
   getIndividualMixRecording: playbackController.getIndividualMixRecording,
-  listIndividualRecordings: playbackController.listIndividualRecordings,
-  getRecordingsByUserId: playbackController.getRecordingsByUserId,
 
   // Maintenance
   cleanupSecureFiles: maintenanceController.cleanupSecureFiles,
