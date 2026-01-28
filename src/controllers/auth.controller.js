@@ -96,8 +96,11 @@ exports.refreshJwtToken = async (req, res) => {
     const { userId } = req.query;
 
     const usersRef = db.collection('users');
+
+    const numericUserId = Number(userId);
+
     const snapshot = await usersRef
-      .where('userId', '==', userId)
+      .where('userId', '==', numericUserId)
       .limit(1)
       .get();
 
