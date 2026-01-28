@@ -224,70 +224,51 @@ function findRecordingForTrack(track, recordings) {
   );
 }
 
-/**
- * Get individual mix recordings with speaking events
- * POST /api/recordings/individual-mix
- */
 exports.getIndividualMixRecording = async (req, res) => {
   try {
-    const { channelName } = req.body;
+    const { channelName, startTime, endTime, type } = req.body;
 
     // 1️⃣ Validation
-    if (!channelName) {
+    if (!channelName || !startTime || !endTime || !type) {
       return res.status(400).json({
         success: false,
-        message: "channelName is required"
+        message: "channelName, startTime, endTime and type are required"
       });
     }
 
-    // 2️⃣ Fetch recordings
-    const recordings = await getMixRecordingsList({ channelName });
+    // 2️⃣ Fetch recordings for this channel
+    const recordings = await getMixRecordingsList({ channelName, type });
+
     if (!recordings.length) {
       return res.status(200).json({
         success: true,
-        data: []
+        data: null
       });
     }
 
-    // 3️⃣ Fetch recording tracks from Firestore
-    const allRecordingTrack = await getRecordingTracks(channelName);
+    const ONE_MINUTE_MS = 60 * 1000;
 
-    const usersList = [];
-
-    // 4️⃣ Core mapping logic
-    for (const track of allRecordingTrack) {
-      const matchedRecording = recordings.find(rec => {
-        console.log(`recording time ${rec.recordingTime}, trackStart : ${track.startTime}, trackEnd: ${track.stopTime}`);
-        const ONE_MINUTE_MS = 60 * 1000;
-        return rec.recordingTime >= (track.startTime - ONE_MINUTE_MS) &&
-          rec.recordingTime <= track.stopTime + ONE_MINUTE_MS;
-      }
+    // 3️⃣ Find matching recording by time range
+    const matchedRecording = recordings.find(rec => {
+      return (
+        rec.recordingTime >= (startTime - ONE_MINUTE_MS) &&
+        rec.recordingTime <= (endTime + ONE_MINUTE_MS)
       );
+    });
 
-      console.log("recording match ? ", matchedRecording);
-
-      if (!matchedRecording) continue;
-
-      const { playableUrl } = matchedRecording;
-      console.log("speaking events total length", track);
-      const enrichedSpeakingEvents = (track.speakingEvents || []).map(event => ({
-        ...event,
-        recordingUrl: playableUrl,
-        trackStartTime: track.startTime,
-        trackStopTime: track.stopTime
-      }));
-      console.log("enrichedSpeakingEvents length", enrichedSpeakingEvents.length);
-      usersList.push({
-        trackId: Number.isInteger(Number(track.id)) ? Number(track.id) : null,
-        recordingUrl: playableUrl,
-        speakingEvents: enrichedSpeakingEvents
+    if (!matchedRecording) {
+      return res.status(200).json({
+        success: true,
+        data: null
       });
     }
 
-    // 5️⃣ Success response
+    // 4️⃣ Return only playableUrl
     return res.status(200).json({
       success: true,
-      data: usersList
+      data: {
+        playableUrl: matchedRecording.playableUrl
+      }
     });
 
   } catch (error) {
@@ -295,173 +276,250 @@ exports.getIndividualMixRecording = async (req, res) => {
 
     return res.status(500).json({
       success: false,
-      message: "Failed to fetch individual mix recordings",
+      message: "Failed to fetch individual mix recording",
       error: error.message
     });
   }
 };
 
-exports.listIndividualRecordings = async (req, res) => {
-  try {
-    const { channelName } = req.body;
+/**
+ * Get individual mix recordings with speaking events
+ * POST /api/recordings/individual-mix
+ */
+// exports.getIndividualMixRecording = async (req, res) => {
+//   try {
+//     const { channelName } = req.body;
 
-    if (!channelName) {
-      return res.status(400).json({
-        success: false,
-        error_message: "channelName is required"
-      });
-    }
+//     // 1️⃣ Validation
+//     if (!channelName) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "channelName is required"
+//       });
+//     }
 
-    const prefix = `recordings/individual/`;
+//     // 2️⃣ Fetch recordings
+//     const recordings = await getMixRecordingsList({ channelName });
+//     if (!recordings.length) {
+//       return res.status(200).json({
+//         success: true,
+//         data: []
+//       });
+//     }
 
-    // Fetch all objects under individual recordings
-    const listResp = await s3.send(new ListObjectsV2Command({
-      Bucket: STORAGE_CONFIG.bucketName,
-      Prefix: prefix,
-    }));
+//     // 3️⃣ Fetch recording tracks from Firestore
+//     const allRecordingTrack = await getRecordingTracks(channelName);
 
-    const allFiles = listResp.Contents || [];
+//     const usersList = [];
 
-    // Filter only .m3u8 files containing channelName
-    const playlistFiles = allFiles.filter(obj =>
-      obj.Key.includes(channelName) && obj.Key.endsWith(".m3u8")
-    );
+//     // 4️⃣ Core mapping logic
+//     for (const track of allRecordingTrack) {
+//       const matchedRecording = recordings.find(rec => {
+//         console.log(`recording time ${rec.recordingTime}, trackStart : ${track.startTime}, trackEnd: ${track.stopTime}`);
+//         const ONE_MINUTE_MS = 60 * 1000;
+//         return rec.recordingTime >= (track.startTime - ONE_MINUTE_MS) &&
+//           rec.recordingTime <= track.stopTime + ONE_MINUTE_MS;
+//       }
+//       );
 
-    if (playlistFiles.length === 0) {
-      return res.status(404).json({
-        success: false,
-        error_message: "No individual .m3u8 found for this channel"
-      });
-    }
+//       console.log("recording match ? ", matchedRecording);
 
-    const userIds = new Set();
-    playlistFiles.forEach(file => {
-      const fileName = file.Key.split("/").pop();
-      const match = fileName.match(/__uid_s_(.*?)__uid_e/);
-      if (match) userIds.add(match[1]);
-    });
-    const userMap = {};
+//       if (!matchedRecording) continue;
+
+//       const { playableUrl } = matchedRecording;
+//       console.log("speaking events total length", track);
+//       const enrichedSpeakingEvents = (track.speakingEvents || []).map(event => ({
+//         ...event,
+//         recordingUrl: playableUrl,
+//         trackStartTime: track.startTime,
+//         trackStopTime: track.stopTime
+//       }));
+//       console.log("enrichedSpeakingEvents length", enrichedSpeakingEvents.length);
+//       usersList.push({
+//         trackId: Number.isInteger(Number(track.id)) ? Number(track.id) : null,
+//         recordingUrl: playableUrl,
+//         speakingEvents: enrichedSpeakingEvents
+//       });
+//     }
+
+//     // 5️⃣ Success response
+//     return res.status(200).json({
+//       success: true,
+//       data: usersList
+//     });
+
+//   } catch (error) {
+//     console.error("getIndividualMixRecording error:", error);
+
+//     return res.status(500).json({
+//       success: false,
+//       message: "Failed to fetch individual mix recordings",
+//       error: error.message
+//     });
+//   }
+// };
+
+// exports.listIndividualRecordings = async (req, res) => {
+//   try {
+//     const { channelName } = req.body;
+
+//     if (!channelName) {
+//       return res.status(400).json({
+//         success: false,
+//         error_message: "channelName is required"
+//       });
+//     }
+
+//     const prefix = `recordings/individual/`;
+
+//     // Fetch all objects under individual recordings
+//     const listResp = await s3.send(new ListObjectsV2Command({
+//       Bucket: STORAGE_CONFIG.bucketName,
+//       Prefix: prefix,
+//     }));
+
+//     const allFiles = listResp.Contents || [];
+
+//     // Filter only .m3u8 files containing channelName
+//     const playlistFiles = allFiles.filter(obj =>
+//       obj.Key.includes(channelName) && obj.Key.endsWith(".m3u8")
+//     );
+
+//     if (playlistFiles.length === 0) {
+//       return res.status(404).json({
+//         success: false,
+//         error_message: "No individual .m3u8 found for this channel"
+//       });
+//     }
+
+//     const userIds = new Set();
+//     playlistFiles.forEach(file => {
+//       const fileName = file.Key.split("/").pop();
+//       const match = fileName.match(/__uid_s_(.*?)__uid_e/);
+//       if (match) userIds.add(match[1]);
+//     });
+//     const userMap = {};
 
 
-    await Promise.all(
-      Array.from(userIds).map(async (uid) => {
-        try {
-          const snap = await db.collection("users").doc(uid).get();
-          if (snap.exists) {
-            userMap[uid] = snap.data()?.username || snap.data()?.name || "Unknown";
-          } else {
-            userMap[uid] = "Unknown";
-          }
-        } catch (e) {
-          userMap[uid] = "Unknown";
-        }
-      })
-    );
-    const results = await Promise.all(
-      playlistFiles.map(async (file) => {
+//     await Promise.all(
+//       Array.from(userIds).map(async (uid) => {
+//         try {
+//           const snap = await db.collection("users").doc(uid).get();
+//           if (snap.exists) {
+//             userMap[uid] = snap.data()?.username || snap.data()?.name || "Unknown";
+//           } else {
+//             userMap[uid] = "Unknown";
+//           }
+//         } catch (e) {
+//           userMap[uid] = "Unknown";
+//         }
+//       })
+//     );
+//     const results = await Promise.all(
+//       playlistFiles.map(async (file) => {
 
-        const fileName = file.Key.split("/").pop(); // just the name
+//         const fileName = file.Key.split("/").pop(); // just the name
 
-        // Extract UID using naming pattern
-        const match = fileName.match(/__uid_s_(.*?)__uid_e/);
-        const userId = match ? match[1] : "unknown";
+//         // Extract UID using naming pattern
+//         const match = fileName.match(/__uid_s_(.*?)__uid_e/);
+//         const userId = match ? match[1] : "unknown";
 
-        // Get playlist content
-        const playlistResp = await s3.send(new GetObjectCommand({
-          Bucket: STORAGE_CONFIG.bucketName,
-          Key: file.Key
-        }));
+//         // Get playlist content
+//         const playlistResp = await s3.send(new GetObjectCommand({
+//           Bucket: STORAGE_CONFIG.bucketName,
+//           Key: file.Key
+//         }));
 
-        const playlistData =
-          await playlistResp.Body.transformToString("utf-8");
+//         const playlistData =
+//           await playlistResp.Body.transformToString("utf-8");
 
-        const lines = playlistData.split("\n");
-        // ⭐ extract recording time from FIRST .ts segment
-        let recordingDate = null;
+//         const lines = playlistData.split("\n");
+//         // ⭐ extract recording time from FIRST .ts segment
+//         let recordingDate = null;
 
-        for (const rawLine of lines) {
-          const line = rawLine.trim();
+//         for (const rawLine of lines) {
+//           const line = rawLine.trim();
 
-          // skip comments / empty lines
-          if (!line || line.startsWith('#')) continue;
+//           // skip comments / empty lines
+//           if (!line || line.startsWith('#')) continue;
 
-          // allow .ts or .ts?query
-          if (line.includes('.ts')) {
-            recordingDate = extractRecordingTimeFromKey(
-              line.split('?')[0]
-            );
-            if (recordingDate) break;
-          }
-        }
+//           // allow .ts or .ts?query
+//           if (line.includes('.ts')) {
+//             recordingDate = extractRecordingTimeFromKey(
+//               line.split('?')[0]
+//             );
+//             if (recordingDate) break;
+//           }
+//         }
 
-        const basePath = file.Key.replace(fileName, "");
+//         const basePath = file.Key.replace(fileName, "");
 
-        // Convert TS file names → signed URLs
-        const rewritten = await Promise.all(
-          lines.map(async (line) => {
-            if (line.endsWith(".ts")) {
-              const segKey = basePath + line;
-              return await getSignedUrl(
-                s3,
-                new GetObjectCommand({
-                  Bucket: STORAGE_CONFIG.bucketName,
-                  Key: segKey
-                }),
-                { expiresIn: 3600 }
-              );
-            }
-            return line;
-          })
-        );
+//         // Convert TS file names → signed URLs
+//         const rewritten = await Promise.all(
+//           lines.map(async (line) => {
+//             if (line.endsWith(".ts")) {
+//               const segKey = basePath + line;
+//               return await getSignedUrl(
+//                 s3,
+//                 new GetObjectCommand({
+//                   Bucket: STORAGE_CONFIG.bucketName,
+//                   Key: segKey
+//                 }),
+//                 { expiresIn: 3600 }
+//               );
+//             }
+//             return line;
+//           })
+//         );
 
-        const finalPlaylist = rewritten.join("\n");
-        const secureKey = `secure/${Date.now()}_${fileName}`;
+//         const finalPlaylist = rewritten.join("\n");
+//         const secureKey = `secure/${Date.now()}_${fileName}`;
 
-        // Upload secure playlist
-        await s3.send(new PutObjectCommand({
-          Bucket: STORAGE_CONFIG.bucketName,
-          Key: secureKey,
-          Body: finalPlaylist,
-          ContentType: "application/vnd.apple.mpegurl"
-        }));
+//         // Upload secure playlist
+//         await s3.send(new PutObjectCommand({
+//           Bucket: STORAGE_CONFIG.bucketName,
+//           Key: secureKey,
+//           Body: finalPlaylist,
+//           ContentType: "application/vnd.apple.mpegurl"
+//         }));
 
-        const signedPlaylistUrl = await getSignedUrl(
-          s3,
-          new GetObjectCommand({
-            Bucket: STORAGE_CONFIG.bucketName,
-            Key: secureKey,
-          }),
-          { expiresIn: 3600 }
-        );
+//         const signedPlaylistUrl = await getSignedUrl(
+//           s3,
+//           new GetObjectCommand({
+//             Bucket: STORAGE_CONFIG.bucketName,
+//             Key: secureKey,
+//           }),
+//           { expiresIn: 3600 }
+//         );
 
-        return {
-          userId: userId,
-          username: userMap[userId] || "Unknown",
-          playlistKey: file.Key,
-          playableUrl: signedPlaylistUrl,
-          lastModified: file.LastModified,
-          size: file.Size,
-          recordingTime: recordingDate
-            ? recordingDate.toISOString()
-            : null, // ⭐ NEW FIELD
-        };
-      })
-    );
+//         return {
+//           userId: userId,
+//           username: userMap[userId] || "Unknown",
+//           playlistKey: file.Key,
+//           playableUrl: signedPlaylistUrl,
+//           lastModified: file.LastModified,
+//           size: file.Size,
+//           recordingTime: recordingDate
+//             ? recordingDate.toISOString()
+//             : null, // ⭐ NEW FIELD
+//         };
+//       })
+//     );
 
-    res.status(200).json({
-      success: true,
-      channelName,
-      data: results
-    });
+//     res.status(200).json({
+//       success: true,
+//       channelName,
+//       data: results
+//     });
 
-  } catch (e) {
-    console.error("Individual recordings error:", e);
-    res.status(500).json({
-      success: false,
-      error_message: "Failed to fetch individual recordings"
-    });
-  }
-};
+//   } catch (e) {
+//     console.error("Individual recordings error:", e);
+//     res.status(500).json({
+//       success: false,
+//       error_message: "Failed to fetch individual recordings"
+//     });
+//   }
+// };
 
 const toEpochMs = (ts) => {
   if (!ts) return null;
@@ -486,172 +544,172 @@ meetings
                  │    ├── source: "agora-volume"
 
 */
-exports.getRecordingsByUserId = async (req, res) => {
-  try {
-    const { meetingId, userId } = req.body;
+// exports.getRecordingsByUserId = async (req, res) => {
+//   try {
+//     const { meetingId, userId } = req.body;
 
-    if (!meetingId || !userId) {
-      return res.status(400).json({
-        success: false,
-        error_message: "meetingId and userId are required",
-      });
-    }
+//     if (!meetingId || !userId) {
+//       return res.status(400).json({
+//         success: false,
+//         error_message: "meetingId and userId are required",
+//       });
+//     }
 
 
-    // 1️⃣ Fetch speaking events from Firestore
-    const eventsSnap = await db
-      .collection("meetings")
-      .doc(meetingId)
-      .collection("participants")
-      .doc(userId)
-      .collection("speakingEvents")
-      .orderBy("start", "asc")
-      .get();
+//     // 1️⃣ Fetch speaking events from Firestore
+//     const eventsSnap = await db
+//       .collection("meetings")
+//       .doc(meetingId)
+//       .collection("participants")
+//       .doc(userId)
+//       .collection("speakingEvents")
+//       .orderBy("start", "asc")
+//       .get();
 
-    if (eventsSnap.empty) {
-      return res.status(200).json({
-        success: true,
-        userId,
-        segments: [],
-      });
-    }
+//     if (eventsSnap.empty) {
+//       return res.status(200).json({
+//         success: true,
+//         userId,
+//         segments: [],
+//       });
+//     }
 
-    const speakingEvents = eventsSnap.docs.map(doc => {
-      const data = doc.data();
-      return {
-        startEpoch: toEpochMs(data.start),
-        endEpoch: toEpochMs(data.end),
-      };
-    });
+//     const speakingEvents = eventsSnap.docs.map(doc => {
+//       const data = doc.data();
+//       return {
+//         startEpoch: toEpochMs(data.start),
+//         endEpoch: toEpochMs(data.end),
+//       };
+//     });
 
-    // 2️⃣ Fetch user's audio playlists (same logic as before)
-    const prefix = `recordings/individual/`;
+//     // 2️⃣ Fetch user's audio playlists (same logic as before)
+//     const prefix = `recordings/individual/`;
 
-    const listResp = await s3.send(
-      new ListObjectsV2Command({
-        Bucket: STORAGE_CONFIG.bucketName,
-        Prefix: prefix,
-      })
-    );
+//     const listResp = await s3.send(
+//       new ListObjectsV2Command({
+//         Bucket: STORAGE_CONFIG.bucketName,
+//         Prefix: prefix,
+//       })
+//     );
 
-    const allFiles = listResp.Contents || [];
+//     const allFiles = listResp.Contents || [];
 
-    const userPlaylists = allFiles.filter(obj =>
-      obj.Key.includes(meetingId) &&
-      obj.Key.includes(`__uid_s_${userId}__uid_e`) &&
-      obj.Key.endsWith(".m3u8")
-    );
+//     const userPlaylists = allFiles.filter(obj =>
+//       obj.Key.includes(meetingId) &&
+//       obj.Key.includes(`__uid_s_${userId}__uid_e`) &&
+//       obj.Key.endsWith(".m3u8")
+//     );
 
-    if (userPlaylists.length === 0) {
-      return res.status(404).json({
-        success: false,
-        error_message: "No audio recordings found for user",
-      });
-    }
+//     if (userPlaylists.length === 0) {
+//       return res.status(404).json({
+//         success: false,
+//         error_message: "No audio recordings found for user",
+//       });
+//     }
 
-    // 3️⃣ Process each playlist
-    const results = [];
+//     // 3️⃣ Process each playlist
+//     const results = [];
 
-    for (const file of userPlaylists) {
-      const fileName = file.Key.split("/").pop();
-      const basePath = file.Key.replace(fileName, "");
+//     for (const file of userPlaylists) {
+//       const fileName = file.Key.split("/").pop();
+//       const basePath = file.Key.replace(fileName, "");
 
-      // Extract playlist recording start time (epoch)
-      const tsStartMatch = fileName.match(/__ts_s_(\d+)/);
-      if (!tsStartMatch) continue;
+//       // Extract playlist recording start time (epoch)
+//       const tsStartMatch = fileName.match(/__ts_s_(\d+)/);
+//       if (!tsStartMatch) continue;
 
-      const playlistStartEpoch = Number(tsStartMatch[1]) * 1000;
+//       const playlistStartEpoch = Number(tsStartMatch[1]) * 1000;
 
-      // Read playlist
-      const playlistResp = await s3.send(
-        new GetObjectCommand({
-          Bucket: STORAGE_CONFIG.bucketName,
-          Key: file.Key,
-        })
-      );
+//       // Read playlist
+//       const playlistResp = await s3.send(
+//         new GetObjectCommand({
+//           Bucket: STORAGE_CONFIG.bucketName,
+//           Key: file.Key,
+//         })
+//       );
 
-      const playlistData =
-        await playlistResp.Body.transformToString("utf-8");
+//       const playlistData =
+//         await playlistResp.Body.transformToString("utf-8");
 
-      const lines = playlistData.split("\n");
+//       const lines = playlistData.split("\n");
 
-      // Replace TS with signed URLs
-      const rewritten = await Promise.all(
-        lines.map(async (line) => {
-          if (line.endsWith(".ts")) {
-            const segKey = basePath + line;
-            return await getSignedUrl(
-              s3,
-              new GetObjectCommand({
-                Bucket: STORAGE_CONFIG.bucketName,
-                Key: segKey,
-              }),
-              { expiresIn: 3600 }
-            );
-          }
-          return line;
-        })
-      );
+//       // Replace TS with signed URLs
+//       const rewritten = await Promise.all(
+//         lines.map(async (line) => {
+//           if (line.endsWith(".ts")) {
+//             const segKey = basePath + line;
+//             return await getSignedUrl(
+//               s3,
+//               new GetObjectCommand({
+//                 Bucket: STORAGE_CONFIG.bucketName,
+//                 Key: segKey,
+//               }),
+//               { expiresIn: 3600 }
+//             );
+//           }
+//           return line;
+//         })
+//       );
 
-      const finalPlaylist = rewritten.join("\n");
+//       const finalPlaylist = rewritten.join("\n");
 
-      const secureKey = `secure/${Date.now()}_${fileName}`;
+//       const secureKey = `secure/${Date.now()}_${fileName}`;
 
-      await s3.send(
-        new PutObjectCommand({
-          Bucket: STORAGE_CONFIG.bucketName,
-          Key: secureKey,
-          Body: finalPlaylist,
-          ContentType: "application/vnd.apple.mpegurl",
-        })
-      );
+//       await s3.send(
+//         new PutObjectCommand({
+//           Bucket: STORAGE_CONFIG.bucketName,
+//           Key: secureKey,
+//           Body: finalPlaylist,
+//           ContentType: "application/vnd.apple.mpegurl",
+//         })
+//       );
 
-      const signedPlaylistUrl = await getSignedUrl(
-        s3,
-        new GetObjectCommand({
-          Bucket: STORAGE_CONFIG.bucketName,
-          Key: secureKey,
-        }),
-        { expiresIn: 3600 }
-      );
+//       const signedPlaylistUrl = await getSignedUrl(
+//         s3,
+//         new GetObjectCommand({
+//           Bucket: STORAGE_CONFIG.bucketName,
+//           Key: secureKey,
+//         }),
+//         { expiresIn: 3600 }
+//       );
 
-      // 4️⃣ Map speaking events to this playlist
-      for (const event of speakingEvents) {
-        if (
-          event.startEpoch >= playlistStartEpoch &&
-          event.endEpoch > playlistStartEpoch
-        ) {
-          const seekFromSeconds =
-            Math.floor((event.startEpoch - playlistStartEpoch) / 1000);
+//       // 4️⃣ Map speaking events to this playlist
+//       for (const event of speakingEvents) {
+//         if (
+//           event.startEpoch >= playlistStartEpoch &&
+//           event.endEpoch > playlistStartEpoch
+//         ) {
+//           const seekFromSeconds =
+//             Math.floor((event.startEpoch - playlistStartEpoch) / 1000);
 
-          results.push({
-            userId,
-            startEpoch: event.startEpoch,
-            endEpoch: event.endEpoch,
-            timeRange: `${new Date(event.startEpoch).toLocaleTimeString()} - ${new Date(event.endEpoch).toLocaleTimeString()}`,
-            playableUrl: signedPlaylistUrl,
-            seekFromSeconds,
-          });
-        }
-      }
-    }
+//           results.push({
+//             userId,
+//             startEpoch: event.startEpoch,
+//             endEpoch: event.endEpoch,
+//             timeRange: `${new Date(event.startEpoch).toLocaleTimeString()} - ${new Date(event.endEpoch).toLocaleTimeString()}`,
+//             playableUrl: signedPlaylistUrl,
+//             seekFromSeconds,
+//           });
+//         }
+//       }
+//     }
 
-    // 5️⃣ Sort by time
-    results.sort((a, b) => a.startEpoch - b.startEpoch);
+//     // 5️⃣ Sort by time
+//     results.sort((a, b) => a.startEpoch - b.startEpoch);
 
-    res.status(200).json({
-      success: true,
-      meetingId,
-      userId,
-      segments: results,
-    });
+//     res.status(200).json({
+//       success: true,
+//       meetingId,
+//       userId,
+//       segments: results,
+//     });
 
-  } catch (err) {
-    console.error("User speaking timeline error:", err);
-    res.status(500).json({
-      success: false,
-      error_message: "Failed to build user speaking timeline",
-    });
-  }
-};
+//   } catch (err) {
+//     console.error("User speaking timeline error:", err);
+//     res.status(500).json({
+//       success: false,
+//       error_message: "Failed to build user speaking timeline",
+//     });
+//   }
+// };
 
