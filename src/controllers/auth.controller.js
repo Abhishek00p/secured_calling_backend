@@ -389,6 +389,11 @@ exports.createUserUnderMember = async (req, res) => {
       createdAt: new Date().toISOString()
     });
 
+    //update total user count under member
+    await memberSnap.ref.update({
+      totalUsers: admin.firestore.FieldValue.increment(1),
+    });
+
     res.status(201).json({
       success: true,
       data: {
