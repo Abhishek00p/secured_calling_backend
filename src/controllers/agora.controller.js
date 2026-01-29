@@ -16,7 +16,7 @@ module.exports = {
   autoStopExpiredMeetingsRecordings: cloudRecordingController.autoStopExpiredMeetingsRecordings,
 
   // Listing / playback
-  listMixRecordings: playbackController.listMixRecordings,
+  fetchAllMixRecordings: playbackController.fetchAllMixRecordings,
   getIndividualMixRecording: playbackController.getIndividualMixRecording,
 
   // Maintenance
