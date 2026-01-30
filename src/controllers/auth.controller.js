@@ -3,6 +3,7 @@ const jwt = require('jsonwebtoken');
 const { db } = require('../config/firebase');
 const { JWT_SECRET } = require('../config/env');
 const { logger } = require('../middlewares/logging.middleware');
+const admin = require('firebase-admin');
 
 /**
  * Helper function to generate JWT token
