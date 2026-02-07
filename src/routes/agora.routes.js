@@ -15,6 +15,9 @@ router.post('/recording/status', [verifyToken, validateRecordingRequest], agoraC
 router.post('/recording/update', [verifyToken, validateRecordingRequest], agoraController.updateRecording);
 router.post('/recording/list/mix', [verifyToken], agoraController.fetchAllMixRecordings);
 router.post('/recording/list/individual', [verifyToken], agoraController.getIndividualMixRecording);
+router.post('/recording/list/mix/audiofiles', [verifyToken], agoraController.fetchAllMixRecordingsAsAudioFiles);
+router.post('/recording/list/individual/audiofile', [verifyToken], agoraController.getIndividualMixRecordingAsAudioFile);
+router.get('/recording/audio/stream', [verifyToken], agoraController.streamAudioFile);
 router.post('/recording/cleanupSecureFiles', agoraController.cleanupSecureFiles);
 
 module.exports = router;
