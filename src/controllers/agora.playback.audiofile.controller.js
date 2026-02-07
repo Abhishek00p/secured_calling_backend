@@ -1,11 +1,12 @@
 const { db } = require('../config/firebase');
 const admin = require('firebase-admin');
-const { STORAGE_CONFIG } = require('../config/env');
+const { STORAGE_CONFIG, API_BASE_URL } = require('../config/env');
 const {
   S3Client,
   GetObjectCommand,
   PutObjectCommand,
   ListObjectsV2Command,
+  DeleteObjectCommand,
 } = require('@aws-sdk/client-s3');
 const fs = require('fs').promises;
 const path = require('path');
@@ -22,6 +23,18 @@ const s3 = new S3Client({
 });
 
 const AUDIOFILES_PREFIX = 'audiofiles/';
+/** Path for streaming audio (client uses this with Authorization header). */
+const STREAM_PATH = '/api/agora/recording/audio/stream';
+
+/**
+ * Build playable URL for an audio file key. Client can use this URL with Authorization header to play the audio.
+ * First time: audio is created and stored in Cloudflare; subsequent calls return the same cached URL.
+ */
+function getPlayableAudioUrl(audioFileKey) {
+  if (!audioFileKey || !audioFileKey.startsWith(AUDIOFILES_PREFIX)) return null;
+  const pathWithQuery = `${STREAM_PATH}?key=${encodeURIComponent(audioFileKey)}`;
+  return API_BASE_URL ? `${API_BASE_URL.replace(/\/$/, '')}${pathWithQuery}` : pathWithQuery;
+}
 
 function extractRecordingTimeFromKey(key) {
   const match = key.match(/_(\d{14,17})\.(m3u8|ts)$/);
@@ -157,8 +170,9 @@ function checkFfmpeg() {
  * Get or create audio file for a single mix recording (no signed URL).
  * Converts HLS to MP3 and stores in Cloudflare under audiofiles/.
  * Uses Firestore cache to avoid re-converting.
+ * @param {Object} options.refresh - If true, ignore cache: delete existing audio from Cloudflare and re-create.
  */
-async function getOrCreateAudioFileForRecording({ channelName, recordingKey }) {
+async function getOrCreateAudioFileForRecording({ channelName, recordingKey, refresh = false }) {
   const docId = recordingKey.replace(/\//g, '_');
   const docRef = db
     .collection('meetings')
@@ -167,14 +181,31 @@ async function getOrCreateAudioFileForRecording({ channelName, recordingKey }) {
     .doc(docId);
 
   const snap = await docRef.get();
-  if (snap.exists) {
+  if (snap.exists && !refresh) {
     const cached = snap.data();
     if (cached.audioFileKey) {
       return {
         audioFileKey: cached.audioFileKey,
         recordingTime: cached.recordingTime,
         playablePath: cached.audioFileKey,
+        playableUrl: getPlayableAudioUrl(cached.audioFileKey),
       };
+    }
+  }
+
+  if (refresh && snap && snap.exists) {
+    const cached = snap.data();
+    if (cached.audioFileKey) {
+      try {
+        await s3.send(
+          new DeleteObjectCommand({
+            Bucket: STORAGE_CONFIG.bucketName,
+            Key: cached.audioFileKey,
+          })
+        );
+      } catch (e) {
+        console.warn('Failed to delete old audio file from Cloudflare:', cached.audioFileKey, e.message);
+      }
     }
   }
 
@@ -217,6 +248,7 @@ async function getOrCreateAudioFileForRecording({ channelName, recordingKey }) {
       audioFileKey: outputKey,
       recordingTime,
       playablePath: outputKey,
+      playableUrl: getPlayableAudioUrl(outputKey),
     };
   } finally {
     if (tmpDir) {
@@ -227,6 +259,38 @@ async function getOrCreateAudioFileForRecording({ channelName, recordingKey }) {
       }
     }
   }
+}
+
+/**
+ * Fast path: get cached audio file for a meeting recording by time range.
+ * Returns cached audio info if we already created it for this channel and time window; otherwise null.
+ * Used so the individual API can return immediately without listing S3 or converting.
+ */
+async function getCachedAudioFileByTimeRange({ channelName, startTime, endTime }) {
+  const ONE_MINUTE_MS = 60 * 1000;
+  const minTime = startTime - ONE_MINUTE_MS;
+  const maxTime = endTime + ONE_MINUTE_MS;
+
+  const snap = await db
+    .collection('meetings')
+    .doc(channelName)
+    .collection('recordingAudioFiles')
+    .get();
+
+  for (const doc of snap.docs) {
+    const data = doc.data();
+    if (!data.audioFileKey || data.recordingTime == null) continue;
+    if (data.recordingTime >= minTime && data.recordingTime <= maxTime) {
+      return {
+        audioFileKey: data.audioFileKey,
+        recordingTime: data.recordingTime,
+        playablePath: data.audioFileKey,
+        playableUrl: getPlayableAudioUrl(data.audioFileKey),
+        recordingKey: data.key,
+      };
+    }
+  }
+  return null;
 }
 
 /**
@@ -291,6 +355,7 @@ exports.fetchAllMixRecordingsAsAudioFiles = async (req, res) => {
         ...matched.map((r) => ({
           url: r.playablePath,
           audioFileKey: r.audioFileKey,
+          playableUrl: r.playableUrl,
           startTime,
         }))
       );
@@ -318,7 +383,8 @@ exports.fetchAllMixRecordingsAsAudioFiles = async (req, res) => {
 
 exports.getIndividualMixRecordingAsAudioFile = async (req, res) => {
   try {
-    const { channelName, startTime, endTime, type } = req.body;
+    const { channelName, startTime, endTime, type, refresh } = req.body;
+    const forceRefresh = refresh === true || refresh === 'true';
 
     if (!channelName || !startTime || !endTime || !type) {
       return res.status(400).json({
@@ -327,7 +393,43 @@ exports.getIndividualMixRecordingAsAudioFile = async (req, res) => {
       });
     }
 
-    const recordings = await getMixRecordingsAsAudioFiles({ channelName, type });
+    // Fast path: if we already created and cached the audio for this meeting, return its URL immediately (unless refresh=true)
+    if (!forceRefresh) {
+      const cached = await getCachedAudioFileByTimeRange({ channelName, startTime, endTime });
+      if (cached) {
+        return res.status(200).json({
+          success: true,
+          data: {
+            playablePath: cached.playablePath,
+            audioFileKey: cached.audioFileKey,
+            playableUrl: cached.playableUrl,
+          },
+        });
+      }
+    }
+
+    // Refresh path: we have a cached recording for this time range; delete old audio and re-create
+    if (forceRefresh) {
+      const cached = await getCachedAudioFileByTimeRange({ channelName, startTime, endTime });
+      if (cached && cached.recordingKey) {
+        const fresh = await getOrCreateAudioFileForRecording({
+          channelName,
+          recordingKey: cached.recordingKey,
+          refresh: true,
+        });
+        return res.status(200).json({
+          success: true,
+          data: {
+            playablePath: fresh.playablePath,
+            audioFileKey: fresh.audioFileKey,
+            playableUrl: fresh.playableUrl,
+          },
+        });
+      }
+    }
+
+    // First-time path: fetch recording from Cloudflare, convert to audio, store in audiofiles/, then return URL
+    const recordings = await getMixRecordingsAsAudioFiles({ channelName, prefix: type });
     if (!recordings.length) {
       return res.status(200).json({ success: true, data: null });
     }
@@ -348,6 +450,7 @@ exports.getIndividualMixRecordingAsAudioFile = async (req, res) => {
       data: {
         playablePath: matched.playablePath,
         audioFileKey: matched.audioFileKey,
+        playableUrl: matched.playableUrl,
       },
     });
   } catch (error) {

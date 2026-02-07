@@ -46,4 +46,6 @@ module.exports = {
     cloudflareEndpoint: process.env.CLOUDFLARE_ENDPOINT,
     bucketName: process.env.BUCKET_NAME,
   },
+  /** Optional. If set, audio file APIs return full playable URLs (e.g. https://your-api.com/api/agora/recording/audio/stream?key=...). Otherwise a path is returned. */
+  API_BASE_URL: process.env.API_BASE_URL || '',
 };
